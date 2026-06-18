@@ -344,7 +344,7 @@ elif page == "City Analysis":
     selected_city = st.selectbox(
         "Select a City",
         sorted(df["City"].unique()),
-        index=sorted(df["City"].unique()).tolist().index("Delhi"),
+        index=list(sorted(df["City"].unique())).index("Delhi"),
     )
 
     city_df = df[df["City"] == selected_city]
@@ -455,7 +455,7 @@ elif page == "COVID Impact":
     covid_city = st.selectbox(
         "Select City for COVID Analysis",
         sorted(df["City"].unique()),
-        index=sorted(df["City"].unique()).tolist().index("Delhi"),
+        index=list(sorted(df["City"].unique())).index("Delhi"),
     )
 
     covid_df = df[
