@@ -1,8 +1,3 @@
-# Data files
-data/raw/*.csv
-data/processed/*.csv
-*.csv
-
 # Jupyter
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
@@ -39,3 +34,6 @@ models/*.joblib
 
 # Logs
 *.log
+
+# Processed data (raw data is kept for Streamlit deployment)
+data/processed/*.csv
