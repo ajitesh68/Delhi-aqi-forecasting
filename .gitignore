@@ -27,8 +27,9 @@ env/
 Thumbs.db
 desktop.ini
 
-# Models (large files)
-models/*.pkl
+# Models (large trained model files — too big for git)
+models/xgb_regressor.pkl
+models/rf_classifier.pkl
 models/*.joblib
 *.h5
 

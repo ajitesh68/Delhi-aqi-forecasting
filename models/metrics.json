@@ -1,0 +1,12 @@
+{
+  "xgb_regressor": {
+    "r2": 0.9093,
+    "mae": 19.8584
+  },
+  "rf_classifier": {
+    "accuracy": 0.825
+  },
+  "feature_count": 12,
+  "training_samples": 23624,
+  "test_samples": 5907
+}
