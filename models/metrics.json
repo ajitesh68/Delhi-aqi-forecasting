@@ -4,7 +4,7 @@
     "mae": 19.8584
   },
   "rf_classifier": {
-    "accuracy": 0.825
+    "accuracy": 0.8234
   },
   "feature_count": 12,
   "training_samples": 23624,

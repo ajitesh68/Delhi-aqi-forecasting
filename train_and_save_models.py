@@ -162,7 +162,7 @@ print("  Saved: models/xgb_regressor.pkl")
 print("\n" + "=" * 60)
 print("STEP 9: Training Random Forest Classifier...")
 rf_clf = RandomForestClassifier(
-    n_estimators=200,
+    n_estimators=80,  # Reduced from 200 to keep file size under 100MB for GitHub
     random_state=42,
     n_jobs=-1,
 )

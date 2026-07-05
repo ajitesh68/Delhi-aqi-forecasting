@@ -28,8 +28,8 @@ Thumbs.db
 desktop.ini
 
 # Models (large trained model files — too big for git)
-models/xgb_regressor.pkl
-models/rf_classifier.pkl
+# models/xgb_regressor.pkl
+# models/rf_classifier.pkl
 models/*.joblib
 *.h5
 
