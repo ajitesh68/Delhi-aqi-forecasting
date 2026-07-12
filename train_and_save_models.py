@@ -23,9 +23,9 @@ df = add_season(df)
 # 3. Full cleaning (drop cols + impute + outliers)
 df = full_cleaning_pipeline(df)
 # 4. Composite Score
-df = compute_composite_score(df)
+df,scaler = compute_composite_score(df)
 # 5. Encode
-df = encode_features(df)
+df,season_encoder = encode_features(df)
 # 6. Prepare X, y
 X_reg, y_reg = prepare_regression_data(df)
 X_clf, y_clf = prepare_classification_data(df)
@@ -45,5 +45,9 @@ evaluate_classification(y_clf_test, rf.predict(X_test), "RF Classifier")
 # 9. Save all artifacts
 joblib.dump(xgb, "models/xgb_regressor.pkl")
 joblib.dump(rf, "models/rf_classifier.pkl")
-# ... save scaler, encoder etc.
+joblib.dump(season_encoder, "models/season_encoder.pkl")
+joblib.dump(scaler, "models/minmax_scaler.pkl")
+joblib.dump(X_reg.columns.tolist(), "models/feature_names.pkl")
+joblib.dump(sorted(df["City"].unique().tolist()), "models/city_list.pkl")
+joblib.dump({0: "Good", 1: "Satisfactory", 2: "Moderate", 3: "Poor", 4: "Very Poor", 5: "Severe"}, "models/bucket_reverse.pkl")
 print("DONE!")

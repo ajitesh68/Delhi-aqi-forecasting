@@ -183,7 +183,7 @@ def full_cleaning_pipeline(df: pd.DataFrame) -> pd.DataFrame:
     
 
     print("\n=== Step 5: Dropping Suspicious Outliers ===")
-    df = drop_suspicious_outliers(df, cities=["Delhi", "Patna", "Lucknow", "Gurugram", "Amritsar"])
+    df = drop_suspicious_outliers(df, cities=["Guwahati", "Jorapokhar", "Talcher", "Hyderabad"])
 
     print("\n=== Step 6: Fixing Ahmedabad Pollutants ===")
     df = fix_ahmedabad_pollutants(df)
@@ -197,14 +197,14 @@ def full_cleaning_pipeline(df: pd.DataFrame) -> pd.DataFrame:
 def drop_suspicious_outliers(df,cities,threshold=500):
     df=df.copy()
     for city in cities:
-        mask = (df['city']==city) & (df['AQI']>threshold)
+        mask = (df['City']==city) & (df['AQI']>threshold)
         count = mask.sum()
-        if mask > 0:
+        if count > 0:
             df = df[~mask]
             print(f"  {city}: Dropped {count} suspicious outlier(s) (>{threshold})")
     return df
 
-def fix_ahmedabad_pollutants(df,thresholds):
+def fix_ahmedabad_pollutants(df, thresholds=None):
     
     """
     Ahmedabad ke pollutants jo Lucknow ke 95th percentile se zyada hain, 
