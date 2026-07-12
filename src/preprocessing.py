@@ -179,7 +179,55 @@ def full_cleaning_pipeline(df: pd.DataFrame) -> pd.DataFrame:
     df = cap_aqi_outliers(df, "Ahmedabad", 500, "season_median")
     for city in ["Delhi", "Patna", "Lucknow", "Gurugram", "Amritsar"]:
         df = cap_aqi_outliers(df, city, 500, "hard_cap")
+    
+    
+
+    print("\n=== Step 5: Dropping Suspicious Outliers ===")
+    df = drop_suspicious_outliers(df, cities=["Delhi", "Patna", "Lucknow", "Gurugram", "Amritsar"])
+
+    print("\n=== Step 6: Fixing Ahmedabad Pollutants ===")
+    df = fix_ahmedabad_pollutants(df)
+    
 
     print(f"\nFinal shape: {df.shape}")
     print(f"Remaining nulls: {df.isnull().sum().sum()}")
     return df
+
+
+def drop_suspicious_outliers(df,cities,threshold=500):
+    df=df.copy()
+    for city in cities:
+        mask = (df['city']==city) & (df['AQI']>threshold)
+        count = mask.sum()
+        if mask > 0:
+            df = df[~mask]
+            print(f"  {city}: Dropped {count} suspicious outlier(s) (>{threshold})")
+    return df
+
+def fix_ahmedabad_pollutants(df,thresholds):
+    
+    """
+    Ahmedabad ke pollutants jo Lucknow ke 95th percentile se zyada hain, 
+    unko Ahmedabad ke season-wise median se replace karo.
+    """
+    df = df.copy()
+    if thresholds is None:
+        thresholds = {"CO": 7.44, "NO2": 72.24, "SO2": 15.70, 
+                      "Benzene": 11.30, "O3": 75.60}
+
+    for pollutant, threshold in thresholds.items():
+        if pollutant not in df.columns:
+            continue
+        ahm_median = df[df['City']=="Ahmedabad"].groupby("Season")[pollutant].median()
+        for season, med_val in ahm_median.items():
+            mask = (df[pollutant]>threshold) & (df['City']=="Ahmedabad") & (df['Season']==season)
+            count = mask.sum()
+            if count>0:
+                df.loc[mask,pollutant]= med_val
+                print(f"  {pollutant} in Ahmedabad - {season}: {count} values > {threshold} replaced with median {med_val:.2f}")
+    return df
+            
+
+
+    
+        
