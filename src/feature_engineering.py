@@ -92,7 +92,7 @@ def compute_composite_score(
         df[col] * weights[col] for col in existing_cols
     )
 
-    return df
+    return df, scaler
 
 
 def encode_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -134,7 +134,7 @@ def encode_features(df: pd.DataFrame) -> pd.DataFrame:
     if "AQI_Bucket" in df.columns:
         df["AQI_Bucket_Encoded"] = df["AQI_Bucket"].map(bucket_order)
 
-    return df
+    return df, le 
 
 
 def prepare_regression_data(df: pd.DataFrame):
