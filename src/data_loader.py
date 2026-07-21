@@ -3,6 +3,7 @@ Data loading and validation utilities.
 """
 import os
 import pandas as pd
+import numpy as np
 
 
 def load_city_day(data_dir: str = "data/raw") -> pd.DataFrame:
@@ -81,3 +82,46 @@ def get_missing_summary(df: pd.DataFrame) -> pd.DataFrame:
     return summary[summary["Missing_Count"] > 0].sort_values(
         "Missing_Percent", ascending=False
     ).reset_index(drop=True)
+
+
+def load_and_combine_data(data_dir: str = "data") -> pd.DataFrame:
+    df1 = load_city_day(data_dir)
+    df2 = load_extended_dataset(data_dir)
+
+    if df2 is None:
+        return df1
+
+    column_mapping = {
+    'city': 'City',
+    'date': 'Date',
+    'pm25': 'PM2.5',
+    'pm10': 'PM10',
+    'no2': 'NO2',
+    'so2': 'SO2',
+    'co': 'CO',
+    'o3': 'O3',
+    'aqi': 'AQI',
+    'aqi_category': 'AQI_Bucket'
+    }
+    
+    
+    df2.rename(columns=column_mapping, inplace=True)
+    
+
+    df2["NO"] = np.nan
+    df2["NOx"] = np.nan
+    df2["NH3"] = np.nan
+    df2["Benzene"] = np.nan
+    df2["Toluene"] = np.nan
+    df2["Xylene"] = np.nan
+
+
+    df2["Date"] = pd.to_datetime(df2["Date"])
+
+    df_combined = pd.concat([df1, df2], ignore_index=True)
+
+
+    df_combined = df_combined.drop_duplicates(subset=['Date', 'City'], keep='first').reset_index(drop=True)
+    return df_combined
+     
+

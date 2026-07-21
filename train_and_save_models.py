@@ -3,7 +3,7 @@ Orchestrator: Train models using src/ modules and save .pkl files.
 Run: python train_and_save_models.py
 """
 import joblib, json, os
-from src.data_loader import load_city_day
+from src.data_loader import load_and_combine_data
 from src.feature_engineering import (
     add_date_features, add_season, compute_composite_score, 
     encode_features, prepare_regression_data, prepare_classification_data
@@ -15,8 +15,8 @@ from src.modeling import (
 )
 
 
-# 1. Load
-df = load_city_day(data_dir="data")
+# 1. Load Data (Integrated Dataset)
+df = load_and_combine_data(data_dir="data")
 # 2. Date + Season features
 df = add_date_features(df)
 df = add_season(df)
