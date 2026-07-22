@@ -13,6 +13,7 @@ import numpy as np
 import joblib
 import json
 import plotly.express as px
+from src.api_client import get_lat_lon, get_live_pollution
 
 # ============================================================
 # PAGE CONFIG
@@ -27,6 +28,8 @@ st.set_page_config(
 # ============================================================
 # LOAD MODELS & ARTIFACTS (cached — loads once)
 # ============================================================
+
+
 @st.cache_resource
 def load_models():
     """Load all pre-trained models and preprocessing artifacts."""
@@ -53,10 +56,14 @@ def load_data():
     df["Month"] = df["Date"].dt.month
 
     def get_season(m):
-        if m <= 2 or m == 12: return "Winter"
-        elif 3 <= m <= 5: return "Spring"
-        elif 6 <= m <= 9: return "Monsoon"
-        else: return "Autumn"
+        if m <= 2 or m == 12:
+            return "Winter"
+        elif 3 <= m <= 5:
+            return "Spring"
+        elif 6 <= m <= 9:
+            return "Monsoon"
+        else:
+            return "Autumn"
 
     df["Season"] = df["Month"].apply(get_season)
     df = df.drop(columns=["Xylene", "Toluene", "NH3"], errors="ignore")
@@ -64,7 +71,8 @@ def load_data():
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     num_cols = [c for c in num_cols if c not in ["Year", "Month"]]
     for col in num_cols:
-        df[col] = df.groupby(["Season", "City"])[col].transform(lambda x: x.fillna(x.median()))
+        df[col] = df.groupby(["Season", "City"])[col].transform(
+            lambda x: x.fillna(x.median()))
         df[col] = df[col].fillna(df[col].median())
 
     df["AQI_Bucket"] = df.groupby(["Season", "City"])["AQI_Bucket"].transform(
@@ -146,7 +154,8 @@ page = st.sidebar.radio(
 st.sidebar.divider()
 st.sidebar.markdown("### Model Performance")
 st.sidebar.metric("Regressor R²", f"{metrics['xgb_regressor']['r2']:.4f}")
-st.sidebar.metric("Classifier Accuracy", f"{metrics['rf_classifier']['accuracy']:.2%}")
+st.sidebar.metric("Classifier Accuracy",
+                  f"{metrics['rf_classifier']['accuracy']:.2%}")
 st.sidebar.metric("Features Used", metrics['feature_count'])
 st.sidebar.markdown(f"Training: {metrics['training_samples']:,} samples")
 
@@ -170,10 +179,12 @@ def build_feature_vector(pollutants, city, season, year, feature_names, city_lis
 
     # 3) Composite Score (MinMax scaled then weighted)
     weight_cols = ["PM2.5", "PM10", "NO2", "CO", "SO2", "O3"]
-    weights = {"PM2.5": 0.35, "PM10": 0.20, "NO2": 0.15, "CO": 0.10, "SO2": 0.10, "O3": 0.10}
+    weights = {"PM2.5": 0.35, "PM10": 0.20, "NO2": 0.15,
+               "CO": 0.10, "SO2": 0.10, "O3": 0.10}
     raw_vals = np.array([[row[c] for c in weight_cols]])
     scaled_vals = scaler.transform(raw_vals)
-    composite = sum(scaled_vals[0][i] * weights[c] for i, c in enumerate(weight_cols))
+    composite = sum(scaled_vals[0][i] * weights[c]
+                    for i, c in enumerate(weight_cols))
     row["Composite_Score"] = composite
 
     # 4) Season encoded
@@ -216,41 +227,136 @@ HEALTH_ADVISORY = {
 if page == "🔮 AQI Predictor":
 
     st.subheader("🔮 Dual Pipeline AQI Prediction")
-    st.markdown("Enter pollutant levels → **XGBoost** predicts AQI value → **Random Forest** predicts AQI category")
+    input_mode = st.radio(
+        "Input Mode", ["📝 Manual Input", "🌐 Fetch Live Data"])
 
-    st.divider()
+    if input_mode == "🌐 Fetch Live Data":
+        st.markdown(
+            "_🌍 Select a city → Live pollution data auto-fetched → AQI predicted!_")
+        st.divider()
 
-    # --- Input Form ---
-    with st.form("prediction_form"):
-        st.markdown("#### 🧪 Pollutant Concentrations")
+        city_search = st.selectbox(
+            "Select City", city_list, index=city_list.index("Delhi"))
 
-        col1, col2, col3 = st.columns(3)
+        if st.button("🔍 Fetch & Predict", use_container_width=True):
+            with st.spinner("Fetching live data from OpenWeatherMap..."):
+                lat, lon = get_lat_lon(city_search)
 
-        with col1:
-            pm25 = st.number_input("PM2.5 (ug/m3)", min_value=0.0, max_value=1000.0, value=80.0, step=1.0)
-            pm10 = st.number_input("PM10 (ug/m3)", min_value=0.0, max_value=1000.0, value=150.0, step=1.0)
-            no = st.number_input("NO (ug/m3)", min_value=0.0, max_value=500.0, value=15.0, step=0.5)
+                if lat is None:
+                    st.error("City not found! Check the name.")
+                else:
+                    live_data = get_live_pollution(lat, lon)
+                    if live_data is None:
+                        st.error("Could not fetch pollution data. Try again.")
+                    else:
+                        st.success(
+                            f"✅ Live data fetched! (Lat: {lat:.2f}, Lon: {lon:.2f})")
 
-        with col2:
-            no2 = st.number_input("NO2 (ug/m3)", min_value=0.0, max_value=500.0, value=30.0, step=0.5)
-            nox = st.number_input("NOx (ppb)", min_value=0.0, max_value=500.0, value=25.0, step=0.5)
-            co = st.number_input("CO (mg/m3)", min_value=0.0, max_value=50.0, value=2.0, step=0.1)
+                        pm25 = live_data.get("pm2_5", 0.0)
+                        pm10 = live_data.get("pm10", 0.0)
+                        no = live_data.get("no", 0.0)
+                        no2 = live_data.get("no2", 0.0)
+                        so2 = live_data.get("so2", 0.0)
+                        o3 = live_data.get("o3", 0.0)
+                        # API mein μg/m3 hai, model mg/m3 maangta hai
+                        co = live_data.get("co", 0.0) / 1000.0
+                        nox = 25.0   # API mein nahi aata, safe default
+                        benzene = 2.0  # API mein nahi aata, safe default
 
-        with col3:
-            so2 = st.number_input("SO2 (ug/m3)", min_value=0.0, max_value=200.0, value=12.0, step=0.5)
-            o3 = st.number_input("O3 (ug/m3)", min_value=0.0, max_value=500.0, value=35.0, step=0.5)
-            benzene = st.number_input("Benzene (ug/m3)", min_value=0.0, max_value=100.0, value=3.0, step=0.1)
+                        from datetime import datetime
+                        now = datetime.now()
+                        year = now.year
+                        month = now.month
+                        if month <= 2 or month == 12:
+                            season = "Winter"
+                        elif 3 <= month <= 5:
+                            season = "Spring"
+                        elif 6 <= month <= 9:
+                            season = "Monsoon"
+                        else:
+                            season = "Autumn"
 
-        st.markdown("#### 🌍 Location & Time")
-        loc1, loc2, loc3 = st.columns(3)
-        with loc1:
-            city = st.selectbox("City", city_list, index=city_list.index("Delhi"))
-        with loc2:
-            season = st.selectbox("Season", ["Winter", "Spring", "Monsoon", "Autumn"])
-        with loc3:
-            year = st.number_input("Year", min_value=2015, max_value=2030, value=2024)
+                        city = city_search
 
-        submitted = st.form_submit_button("🔮 Predict AQI", use_container_width=True)
+                        pollutants = {
+                            "PM2.5": pm25, "PM10": pm10, "NO": no, "NO2": no2,
+                            "NOx": nox, "CO": co, "SO2": so2, "O3": o3, "Benzene": benzene,
+                        }
+
+                        input_df = build_feature_vector(
+                            pollutants, city, season, year,
+                            feature_names, city_list, season_encoder, scaler,
+                        )
+
+                        
+                        aqi_value = xgb_reg.predict(input_df)[0]
+                        bucket_code = rf_clf.predict(input_df)[0]
+                        bucket_name = bucket_reverse[bucket_code]
+                        bucket_proba = rf_clf.predict_proba(input_df)[0]
+
+                        color = BUCKET_COLORS.get(bucket_name, "#333")
+                        advisory = HEALTH_ADVISORY.get(bucket_name, "")
+
+                        
+                        st.divider()
+                        st.markdown("### 📋 Prediction Results")
+                        r1, r2, r3 = st.columns(3)
+                        r1.metric("🎯 Predicted AQI", f"{aqi_value:.0f}")
+                        r2.metric("📊 Category", bucket_name)
+                        r3.metric("🏙️ City", city)
+
+                        st.markdown(f"""
+                        <div class="result-card" style="background:{color};">
+                            <h2 style="color:white;">AQI: {aqi_value:.0f} — {bucket_name}</h2>
+                            <h3 style="color:rgba(255,255,255,0.85);">{advisory}</h3>
+                        </div>
+                        """, unsafe_allow_html=True)
+    else:
+        st.markdown("_🧪 Enter pollutant levels → XGBoost + RF predict AQI_")
+        st.divider()
+        with st.form("prediction_form"):
+            st.markdown("#### 🧪 Pollutant Concentrations")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                pm25 = st.number_input(
+                    "PM2.5 (ug/m3)", min_value=0.0, max_value=1000.0, value=80.0, step=1.0)
+                pm10 = st.number_input(
+                    "PM10 (ug/m3)", min_value=0.0, max_value=1000.0, value=150.0, step=1.0)
+                no = st.number_input("NO (ug/m3)", min_value=0.0,
+                                     max_value=500.0, value=15.0, step=0.5)
+
+            with col2:
+                no2 = st.number_input(
+                    "NO2 (ug/m3)", min_value=0.0, max_value=500.0, value=30.0, step=0.5)
+                nox = st.number_input("NOx (ppb)", min_value=0.0,
+                                      max_value=500.0, value=25.0, step=0.5)
+                co = st.number_input("CO (mg/m3)", min_value=0.0,
+                                     max_value=50.0, value=2.0, step=0.1)
+
+            with col3:
+                so2 = st.number_input(
+                    "SO2 (ug/m3)", min_value=0.0, max_value=200.0, value=12.0, step=0.5)
+                o3 = st.number_input("O3 (ug/m3)", min_value=0.0,
+                                     max_value=500.0, value=35.0, step=0.5)
+                benzene = st.number_input(
+                    "Benzene (ug/m3)", min_value=0.0, max_value=100.0, value=3.0, step=0.1)
+
+            st.markdown("#### 🌍 Location & Time")
+            loc1, loc2, loc3 = st.columns(3)
+            with loc1:
+                city = st.selectbox("City", city_list,
+                                    index=city_list.index("Delhi"))
+            with loc2:
+                season = st.selectbox(
+                    "Season", ["Winter", "Spring", "Monsoon", "Autumn"])
+            with loc3:
+                year = st.number_input(
+                    "Year", min_value=2015, max_value=2030, value=2024)
+
+            submitted = st.form_submit_button(
+                "🔮 Predict AQI", use_container_width=True)
 
     # --- Prediction ---
     if submitted:
@@ -318,9 +424,11 @@ if page == "🔮 AQI Predictor":
         st.markdown("#### 🔄 Dual Pipeline Summary")
         pipe1, pipe2 = st.columns(2)
         with pipe1:
-            st.info(f"**Pipeline 1 — XGBoost Regressor**\n\nPredicted AQI Value: **{aqi_value:.1f}**\n\nR² Score: {metrics['xgb_regressor']['r2']:.4f} | MAE: {metrics['xgb_regressor']['mae']:.2f}")
+            st.info(
+                f"**Pipeline 1 — XGBoost Regressor**\n\nPredicted AQI Value: **{aqi_value:.1f}**\n\nR² Score: {metrics['xgb_regressor']['r2']:.4f} | MAE: {metrics['xgb_regressor']['mae']:.2f}")
         with pipe2:
-            st.info(f"**Pipeline 2 — RF Classifier**\n\nPredicted Category: **{bucket_name}**\n\nAccuracy: {metrics['rf_classifier']['accuracy']:.2%} | Confidence: {max(bucket_proba)*100:.1f}%")
+            st.info(
+                f"**Pipeline 2 — RF Classifier**\n\nPredicted Category: **{bucket_name}**\n\nAccuracy: {metrics['rf_classifier']['accuracy']:.2%} | Confidence: {max(bucket_proba)*100:.1f}%")
 
 
 # ============================================================
@@ -341,17 +449,20 @@ elif page == "📊 Dashboard":
 
     with col_left:
         st.markdown("#### 🔴 Most Polluted")
-        top5 = df.groupby("City")["AQI"].mean().sort_values(ascending=False).head(5).reset_index()
+        top5 = df.groupby("City")["AQI"].mean().sort_values(
+            ascending=False).head(5).reset_index()
         top5.columns = ["City", "Avg AQI"]
         top5["Avg AQI"] = top5["Avg AQI"].round(1)
         fig = px.bar(top5, x="Avg AQI", y="City", orientation="h", color="Avg AQI",
                      color_continuous_scale="Reds", text="Avg AQI")
-        fig.update_layout(height=300, showlegend=False, yaxis=dict(autorange="reversed"))
+        fig.update_layout(height=300, showlegend=False,
+                          yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, use_container_width=True)
 
     with col_right:
         st.markdown("#### 🟢 Cleanest")
-        bot5 = df.groupby("City")["AQI"].mean().sort_values().head(5).reset_index()
+        bot5 = df.groupby("City")["AQI"].mean(
+        ).sort_values().head(5).reset_index()
         bot5.columns = ["City", "Avg AQI"]
         bot5["Avg AQI"] = bot5["Avg AQI"].round(1)
         fig = px.bar(bot5, x="Avg AQI", y="City", orientation="h", color="Avg AQI",
@@ -390,12 +501,14 @@ elif page == "🏙️ City Analysis":
         yearly = cdf.groupby("Year")["AQI"].mean().reset_index()
         fig = px.line(yearly, x="Year", y="AQI", markers=True,
                       title=f"Yearly AQI — {selected}")
-        fig.update_traces(line=dict(width=3, color="#667eea"), marker=dict(size=10))
+        fig.update_traces(line=dict(width=3, color="#667eea"),
+                          marker=dict(size=10))
         fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        pollutants = [p for p in ["PM2.5", "PM10", "NO2", "CO", "SO2", "O3"] if p in cdf.columns]
+        pollutants = [p for p in ["PM2.5", "PM10", "NO2",
+                                  "CO", "SO2", "O3"] if p in cdf.columns]
         avg = cdf[pollutants].mean()
         fig = px.bar(x=pollutants, y=avg.values, color=avg.values,
                      color_continuous_scale="YlOrRd",
@@ -431,7 +544,8 @@ elif page == "🦠 COVID Impact":
         m1, m2, m3 = st.columns(3)
         m1.metric("2019 Avg AQI", f"{avg19:.0f}")
         m2.metric("2020 Avg AQI", f"{avg20:.0f}")
-        m3.metric("Change", f"{pct:+.1f}%", delta=f"{pct:+.1f}%", delta_color="inverse")
+        m3.metric("Change", f"{pct:+.1f}%",
+                  delta=f"{pct:+.1f}%", delta_color="inverse")
 
 
 # ============================================================
