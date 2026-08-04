@@ -39,3 +39,11 @@ models/*.joblib
 
 # Processed data (raw data is kept for Streamlit deployment)
 data/processed/*.csv
+
+# Huge datasets (Not used for Streamlit, too large for GitHub)
+data/*.csv
+data/raw/*.csv
+data/raw/city_hour.csv/
+data/raw/station_hour.csv/
+data/raw/*hour.csv
+data/raw/*.zip
