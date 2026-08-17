@@ -1,4 +1,4 @@
-﻿# Jupyter
+# Jupyter
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
 
@@ -32,7 +32,7 @@ desktop.ini
 # models/xgb_regressor.pkl
 # models/rf_classifier.pkl
 models/*.joblib
-*.h5
+# *.h5
 
 # Logs
 *.log
