@@ -84,40 +84,71 @@ def load_scalers(location):
 @st.cache_data(ttl=1800)
 def fetch_live_data(location, days_back=21):
     coords = LOCATIONS[location]
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-    weather_params = {
-        "latitude": coords["lat"], "longitude": coords["lon"],
-        "start_date": start_date, "end_date": end_date,
-        "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m",
-        "timezone": "Asia/Kolkata",
-    }
-    aq_params = {
-        "latitude": coords["lat"], "longitude": coords["lon"],
-        "start_date": start_date, "end_date": end_date,
-        "hourly": "pm2_5,pm10,carbon_monoxide,nitrogen_dioxide",
-        "timezone": "Asia/Kolkata",
-    }
+    today = datetime.now()
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    start_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
 
     try:
-        w_resp = requests.get("https://archive-api.open-meteo.com/v1/archive", params=weather_params, timeout=30)
-        a_resp = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=aq_params, timeout=30)
-        w_data = w_resp.json()["hourly"]
-        a_data = a_resp.json()["hourly"]
+        # --- 1. Historical weather from archive API (up to yesterday) ---
+        w_archive = requests.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                "latitude": coords["lat"], "longitude": coords["lon"],
+                "start_date": start_date, "end_date": yesterday,
+                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m",
+                "timezone": "Asia/Kolkata",
+            }, timeout=30
+        ).json()
 
-        df = pd.DataFrame({
-            "datetime": pd.to_datetime(w_data["time"]),
-            "temp_c": w_data["temperature_2m"],
-            "humidity": w_data["relative_humidity_2m"],
-            "pressure_mb": w_data["surface_pressure"],
-            "windspeed_kph": w_data["wind_speed_10m"],
-            "pm2_5": a_data["pm2_5"],
-            "pm10": a_data["pm10"],
-            "co": a_data["carbon_monoxide"],
-            "no2": a_data["nitrogen_dioxide"],
-            "location": location,
+        # --- 2. Today's weather from forecast API ---
+        w_forecast = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": coords["lat"], "longitude": coords["lon"],
+                "start_date": today_str, "end_date": today_str,
+                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m",
+                "timezone": "Asia/Kolkata",
+            }, timeout=30
+        ).json()
+
+        # Merge weather data
+        w_times = w_archive["hourly"]["time"] + w_forecast.get("hourly", {}).get("time", [])
+        w_temp = w_archive["hourly"]["temperature_2m"] + w_forecast.get("hourly", {}).get("temperature_2m", [])
+        w_hum = w_archive["hourly"]["relative_humidity_2m"] + w_forecast.get("hourly", {}).get("relative_humidity_2m", [])
+        w_pres = w_archive["hourly"]["surface_pressure"] + w_forecast.get("hourly", {}).get("surface_pressure", [])
+        w_wind = w_archive["hourly"]["wind_speed_10m"] + w_forecast.get("hourly", {}).get("wind_speed_10m", [])
+
+        weather_df = pd.DataFrame({
+            "datetime": pd.to_datetime(w_times),
+            "temp_c": w_temp,
+            "humidity": w_hum,
+            "pressure_mb": w_pres,
+            "windspeed_kph": w_wind,
         })
+
+        # --- 3. Air quality data (supports current dates natively) ---
+        a_resp = requests.get(
+            "https://air-quality-api.open-meteo.com/v1/air-quality",
+            params={
+                "latitude": coords["lat"], "longitude": coords["lon"],
+                "start_date": start_date, "end_date": today_str,
+                "hourly": "pm2_5,pm10,carbon_monoxide,nitrogen_dioxide",
+                "timezone": "Asia/Kolkata",
+            }, timeout=30
+        ).json()
+
+        aq_df = pd.DataFrame({
+            "datetime": pd.to_datetime(a_resp["hourly"]["time"]),
+            "pm2_5": a_resp["hourly"]["pm2_5"],
+            "pm10": a_resp["hourly"]["pm10"],
+            "co": a_resp["hourly"]["carbon_monoxide"],
+            "no2": a_resp["hourly"]["nitrogen_dioxide"],
+        })
+
+        # --- 4. Merge weather + air quality on datetime ---
+        df = pd.merge(weather_df, aq_df, on="datetime", how="inner")
+        df["location"] = location
         df[FEATURES] = df[FEATURES].interpolate(method="linear")
         df.dropna(subset=FEATURES, inplace=True)
         return df
