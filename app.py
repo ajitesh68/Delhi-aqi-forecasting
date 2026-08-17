@@ -60,6 +60,7 @@ def load_forecast_model(location):
 
 @st.cache_data
 def load_scalers(location):
+    # Cache buster 1
     loc_tag = location.lower().replace(" ", "_")
     f_scaler_path = os.path.join(MODELS_DIR, f"{loc_tag}_feature_scaler.pkl")
     t_scaler_path = os.path.join(MODELS_DIR, f"{loc_tag}_target_scaler.pkl")
