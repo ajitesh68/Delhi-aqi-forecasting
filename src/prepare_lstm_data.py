@@ -12,6 +12,8 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 POLLUTANTS = ["pm2_5", "pm10", "co", "no2"]
 WEATHER = ["temp_c", "humidity", "pressure_mb", "windspeed_kph"]
 FEATURES = POLLUTANTS + WEATHER
+WINDOW_SIZE = 336  # 14 days of hourly data
+FORECAST_HOURS = 72
 
 DIWALI_DATES = {
     2015: "2015-11-11", 2016: "2016-10-30", 2017: "2017-10-19",
@@ -20,9 +22,6 @@ DIWALI_DATES = {
     2024: "2024-11-01", 2025: "2025-10-20", 2026: "2026-11-08",
     2027: "2027-10-29",
 }
-
-WINDOW_SIZE = 72
-FORECAST_HOURS = 72
 
 
 def load_and_combine():
