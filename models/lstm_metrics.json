@@ -1,0 +1,38 @@
+{
+  "anand_vihar": {
+    "test_mse_scaled": 0.009005,
+    "test_mae_scaled": 0.066251,
+    "epochs_requested": 100,
+    "batch_size": 64
+  },
+  "connaught_place": {
+    "test_mse_scaled": 0.008894,
+    "test_mae_scaled": 0.062659,
+    "epochs_requested": 100,
+    "batch_size": 64
+  },
+  "dwarka": {
+    "test_mse_scaled": 0.009011,
+    "test_mae_scaled": 0.059861,
+    "epochs_requested": 100,
+    "batch_size": 64
+  },
+  "igi_airport": {
+    "test_mse_scaled": 0.009034,
+    "test_mae_scaled": 0.059678,
+    "epochs_requested": 100,
+    "batch_size": 64
+  },
+  "okhla_phase_iii": {
+    "test_mse_scaled": 0.009485,
+    "test_mae_scaled": 0.062593,
+    "epochs_requested": 100,
+    "batch_size": 64
+  },
+  "rohini": {
+    "test_mse_scaled": 0.009245,
+    "test_mae_scaled": 0.065023,
+    "epochs_requested": 100,
+    "batch_size": 64
+  }
+}

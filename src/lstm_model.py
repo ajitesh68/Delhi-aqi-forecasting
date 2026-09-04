@@ -1,5 +1,7 @@
 import numpy as np
 import os
+import argparse
+import json
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -26,7 +28,7 @@ def build_model(input_shape, output_size):
     return model
 
 
-def train_location(loc_tag):
+def train_location(loc_tag, epochs=100, batch_size=64):
     X_train = np.load(os.path.join(PROCESSED_DIR, f"{loc_tag}_X_train.npy"))
     X_test = np.load(os.path.join(PROCESSED_DIR, f"{loc_tag}_X_test.npy"))
     y_train = np.load(os.path.join(PROCESSED_DIR, f"{loc_tag}_y_train.npy"))
@@ -53,8 +55,8 @@ def train_location(loc_tag):
     history = model.fit(
         X_train, y_train_flat,
         validation_data=(X_test, y_test_flat),
-        epochs=100,
-        batch_size=64,
+        epochs=epochs,
+        batch_size=batch_size,
         callbacks=callbacks,
         verbose=1,
     )
@@ -67,10 +69,10 @@ def train_location(loc_tag):
     print(f"Test Loss (MSE): {loss:.6f}")
     print(f"Test MAE: {mae:.6f}")
 
-    return model, history
+    return model, history, loss, mae
 
 
-def train_all():
+def train_all(force=False, epochs=100, batch_size=64):
     os.makedirs(MODELS_DIR, exist_ok=True)
 
     locations = set()
@@ -79,17 +81,39 @@ def train_all():
             loc_tag = f.replace("_X_train.npy", "")
             locations.add(loc_tag)
 
+    metrics = {}
     for loc_tag in sorted(locations):
         model_path = os.path.join(MODELS_DIR, f"{loc_tag}_lstm.h5")
-        if os.path.exists(model_path):
+        if os.path.exists(model_path) and not force:
             print(f"Skipping {loc_tag}, model already exists.")
             continue
 
         print(f"\n{'='*60}")
         print(f"Training: {loc_tag}")
         print(f"{'='*60}")
-        train_location(loc_tag)
+        _, _, loss, mae = train_location(loc_tag, epochs=epochs, batch_size=batch_size)
+        metrics[loc_tag] = {
+            "test_mse_scaled": round(float(loss), 6),
+            "test_mae_scaled": round(float(mae), 6),
+            "epochs_requested": epochs,
+            "batch_size": batch_size,
+        }
+
+    metrics_path = os.path.join(MODELS_DIR, "lstm_metrics.json")
+    if metrics:
+        with open(metrics_path, "w", encoding="utf-8") as file:
+            json.dump(metrics, file, indent=2)
+        print(f"Metrics saved: {metrics_path}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train location-specific AQI LSTM models.")
+    parser.add_argument("--force", action="store_true", help="Retrain even when model files already exist.")
+    parser.add_argument("--epochs", type=int, default=100, help="Maximum epochs per location.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    train_all()
+    args = parse_args()
+    train_all(force=args.force, epochs=args.epochs, batch_size=args.batch_size)

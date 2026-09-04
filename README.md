@@ -44,6 +44,15 @@ A deep-learning-based air quality forecasting system for Delhi, using Multivaria
    ```
 3. Open your browser and navigate to `http://localhost:8501`.
 
+To rebuild the processed data and retrain all six models:
+
+```bash
+python src/prepare_lstm_data.py
+python src/lstm_model.py --force --epochs 100 --batch-size 64
+```
+
+The `--force` flag replaces existing model files. Training is faster on a Google Colab GPU than on a CPU laptop.
+
 ## 📁 Project Structure
 
 ```
@@ -51,10 +60,10 @@ india-aqi-analysis/
 ├── app.py                  # Main Streamlit web application
 ├── src/
 │   ├── lstm_model.py       # LSTM training script
-│   ├── data_prep.py        # Data preparation & feature engineering
-│   └── aqi_calculator.py   # CPCB AQI formula implementation
+│   ├── prepare_lstm_data.py # Data preparation & feature engineering
+│   └── aqi_formula.py       # CPCB AQI formula implementation
 ├── scripts/
-│   └── download_data.py    # Open-Meteo API data ingestion
+│   └── download_2026_data.py # Open-Meteo API data ingestion
 ├── models/
 │   ├── <location>_lstm.h5              # Trained LSTM model weights
 │   ├── <location>_feature_scaler.pkl   # Feature MinMaxScaler

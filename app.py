@@ -186,6 +186,14 @@ def run_forecast(model, sequence, target_scaler):
     return pred_actual
 
 
+def calibrate_forecast(predictions, live_df):
+    """Reduce short-term distribution shift using the latest observed pollutants."""
+    recent = live_df[POLLUTANTS].tail(24).median().to_numpy(dtype=float)
+    if not np.isfinite(recent).all():
+        return predictions
+    return np.clip(0.75 * predictions + 0.25 * recent, 0, None)
+
+
 def run_backtesting(df, model, feature_scaler, target_scaler, days_back=7):
     results = []
     total_hours = len(df)
@@ -255,6 +263,7 @@ if run_btn:
         if seq is None:
             st.stop()
         predictions = run_forecast(model, seq, target_scaler)
+        predictions = calibrate_forecast(predictions, live_df)
 
     now = datetime.now()
 

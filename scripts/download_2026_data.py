@@ -78,7 +78,7 @@ def download_all():
 
         dt = pd.to_datetime(merged["datetime"])
         merged["date_ist"] = dt.dt.strftime("%d/%m/%Y")
-        merged["time_ist"] = dt.dt.strftime("%-H:00")
+        merged["time_ist"] = dt.dt.hour.astype(str) + ":00"
 
         merged = merged[[
             "date_ist", "time_ist", "location", "lat", "lon",

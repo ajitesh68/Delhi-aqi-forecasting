@@ -106,13 +106,10 @@ def prepare_location_data(df, location):
     loc_df.dropna(subset=FEATURES, inplace=True)
 
     target_scaler = MinMaxScaler()
-    target_scaler.fit(loc_df[POLLUTANTS])
+    target_values = target_scaler.fit_transform(loc_df[POLLUTANTS])
 
     scaler = MinMaxScaler()
-    loc_df[feature_cols] = scaler.fit_transform(loc_df[feature_cols])
-
-    feature_values = loc_df[feature_cols].values
-    target_values = loc_df[POLLUTANTS].values
+    feature_values = scaler.fit_transform(loc_df[feature_cols])
 
     X, y = create_sequences(feature_values, target_values, WINDOW_SIZE, FORECAST_HOURS)
 
