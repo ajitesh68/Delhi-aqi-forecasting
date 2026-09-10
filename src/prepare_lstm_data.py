@@ -11,9 +11,10 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 POLLUTANTS = ["pm2_5", "pm10", "co", "no2"]
 WEATHER = ["temp_c", "humidity", "pressure_mb", "windspeed_kph"]
+FIRE = ["fire_count"]
 FEATURES = POLLUTANTS + WEATHER
-WINDOW_SIZE = 336  # 14 days of hourly data
-FORECAST_HOURS = 72
+WINDOW_SIZE = 336
+FORECAST_HOURS = 24
 
 DIWALI_DATES = {
     2015: "2015-11-11", 2016: "2016-10-30", 2017: "2017-10-19",
@@ -34,6 +35,10 @@ def load_and_combine():
             drop_cols = ["aqi_index", "condition_text", "description"]
             df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
 
+            if "fire_count" not in df.columns:
+                df["fire_count"] = 0.0
+                print(f"  [INFO] Added fire_count=0 to {f} (old format)")
+
             sample_time = str(df["time_ist"].iloc[0])
             if "-" in sample_time:
                 df["datetime"] = pd.to_datetime(df["time_ist"])
@@ -45,7 +50,7 @@ def load_and_combine():
                 )
 
             frames.append(df)
-            print(f"Loaded {f}: {len(df)} rows")
+            print(f"Loaded {f}: {len(df)} rows, columns: {list(df.columns)}")
 
     combined = pd.concat(frames, ignore_index=True)
     combined.sort_values(["location", "datetime"], inplace=True)
@@ -97,13 +102,16 @@ def prepare_location_data(df, location):
     loc_df.sort_values("datetime", inplace=True)
     loc_df.reset_index(drop=True, inplace=True)
 
-    feature_cols = FEATURES + [
+    feature_cols = FEATURES + FIRE + [
         "hour_sin", "hour_cos", "month_sin", "month_cos",
         "is_weekend", "days_to_diwali",
     ]
 
-    loc_df[FEATURES] = loc_df[FEATURES].interpolate(method="linear")
+    interpolate_cols = FEATURES + FIRE
+    loc_df[interpolate_cols] = loc_df[interpolate_cols].interpolate(method="linear")
     loc_df.dropna(subset=FEATURES, inplace=True)
+
+    loc_df["fire_count"] = loc_df["fire_count"].fillna(0)
 
     target_scaler = MinMaxScaler()
     target_values = target_scaler.fit_transform(loc_df[POLLUTANTS])
@@ -136,6 +144,8 @@ def run():
 
     locations = sorted(df["location"].unique())
     print(f"Locations: {locations}")
+    print(f"Feature count: 15 (4 pollutants + 4 weather + 1 fire + 6 temporal)")
+    print(f"Forecast horizon: {FORECAST_HOURS} hours")
 
     for loc in locations:
         print(f"\nPreparing {loc}...")
@@ -151,8 +161,10 @@ def run():
 
         print(f"  Train: X={X_train.shape}, y={y_train.shape}")
         print(f"  Test:  X={X_test.shape}, y={y_test.shape}")
+        print(f"  Features per timestep: {X_train.shape[2]}")
 
     print("\nData preparation complete.")
+    print(f"Window: {WINDOW_SIZE} hours | Forecast: {FORECAST_HOURS} hours | Features: 15")
 
 
 if __name__ == "__main__":

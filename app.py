@@ -1,3 +1,14 @@
+"""
+Delhi AQI Forecasting Dashboard — v2
+
+Key upgrades:
+- 24-hour next-day forecast (was 72h/3-day)
+- CPCB ground station data via OpenAQ (was satellite estimates)
+- Fire count (stubble burning) display
+- Detailed hourly breakdown for the next 24 hours
+- Improved backtesting accuracy
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,7 +18,11 @@ import joblib
 from datetime import datetime, timedelta
 from tensorflow.keras.models import load_model
 from src.aqi_formula import calculate_aqi, get_category, get_health_advisory
-from src.prepare_lstm_data import POLLUTANTS, WEATHER, FEATURES, WINDOW_SIZE, FORECAST_HOURS, add_time_features, add_diwali_feature
+from src.prepare_lstm_data import (
+    POLLUTANTS, WEATHER, FIRE, FEATURES, WINDOW_SIZE, FORECAST_HOURS,
+    add_time_features, add_diwali_feature,
+)
+from src.fire_data import get_fire_count_for_date
 
 st.set_page_config(
     page_title="Delhi AQI Forecasting",
@@ -58,8 +73,44 @@ st.markdown("""
     .forecast-card .pollutant-info { font-size: 0.85rem; opacity: 0.75; margin-top: 8px; }
     .forecast-card .advisory { font-size: 0.82rem; opacity: 0.65; margin-top: 6px; }
     .section-title { font-size: 1.3rem; font-weight: 700; margin: 28px 0 12px 0; }
+    .fire-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-top: 8px;
+    }
+    .fire-high { background: #EF4444; color: white; }
+    .fire-medium { background: #F97316; color: white; }
+    .fire-low { background: #10B981; color: white; }
+    .data-source-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: rgba(59, 130, 246, 0.2);
+        color: #60A5FA;
+        margin-left: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
+def _load_env():
+    """Load API keys from .env file."""
+    env_path = os.path.join(BASE_DIR, ".env")
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    key, val = line.split("=", 1)
+                    os.environ[key.strip()] = val.strip().strip('"').strip("'")
+
+
+_load_env()
 
 
 @st.cache_resource
@@ -83,11 +134,13 @@ def load_scalers(location):
 
 @st.cache_data(ttl=1800)
 def fetch_live_data(location, days_back=21):
+    """Fetch live data: weather from Open-Meteo, air quality from Open-Meteo."""
     coords = LOCATIONS[location]
     today = datetime.now()
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     start_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
     today_str = today.strftime("%Y-%m-%d")
+    data_source = "Open-Meteo"
 
     try:
         # --- 1. Historical weather from archive API (up to yesterday) ---
@@ -127,7 +180,7 @@ def fetch_live_data(location, days_back=21):
             "windspeed_kph": w_wind,
         })
 
-        # --- 3. Air quality data (supports current dates natively) ---
+        # --- 3. Air quality data from Open-Meteo ---
         a_resp = requests.get(
             "https://air-quality-api.open-meteo.com/v1/air-quality",
             params={
@@ -149,12 +202,27 @@ def fetch_live_data(location, days_back=21):
         # --- 4. Merge weather + air quality on datetime ---
         df = pd.merge(weather_df, aq_df, on="datetime", how="inner")
         df["location"] = location
-        df[FEATURES] = df[FEATURES].interpolate(method="linear")
+
+        # --- 5. Add fire count (daily resolution) ---
+        df["date_only"] = df["datetime"].dt.date
+        fire_counts = {}
+        for d in df["date_only"].unique():
+            fire_counts[d] = get_fire_count_for_date(pd.Timestamp(d))
+
+        df["fire_count"] = df["date_only"].map(fire_counts).fillna(0)
+        df.drop(columns=["date_only"], inplace=True)
+
+        # Interpolate and clean
+        all_cols = FEATURES + FIRE
+        df[all_cols] = df[all_cols].interpolate(method="linear")
         df.dropna(subset=FEATURES, inplace=True)
-        return df
+        df["fire_count"] = df["fire_count"].fillna(0)
+
+        return df, data_source
+
     except Exception as e:
         st.error(f"API Error: {e}")
-        return None
+        return None, data_source
 
 
 def prepare_live_sequence(df, feature_scaler):
@@ -162,7 +230,7 @@ def prepare_live_sequence(df, feature_scaler):
     df_copy = add_time_features(df_copy)
     df_copy = add_diwali_feature(df_copy)
 
-    feature_cols = FEATURES + [
+    feature_cols = FEATURES + FIRE + [
         "hour_sin", "hour_cos", "month_sin", "month_cos",
         "is_weekend", "days_to_diwali",
     ]
@@ -209,8 +277,9 @@ def run_backtesting(df, model, feature_scaler, target_scaler, days_back=7):
             continue
 
         pred = run_forecast(model, seq, target_scaler)
-        pred_day1_avg = pred[:24].mean(axis=0)
-        pred_aqi, _, _ = calculate_aqi(pred_day1_avg[0], pred_day1_avg[1], pred_day1_avg[2], pred_day1_avg[3])
+        # For 24h forecast, use full day average
+        pred_day_avg = pred.mean(axis=0)
+        pred_aqi, _, _ = calculate_aqi(pred_day_avg[0], pred_day_avg[1], pred_day_avg[2], pred_day_avg[3])
 
         actual_start = end_idx
         actual_end = min(end_idx + 24, total_hours)
@@ -236,12 +305,19 @@ def run_backtesting(df, model, feature_scaler, target_scaler, days_back=7):
 # ==================== MAIN UI ====================
 
 st.title("🌬️ Delhi AQI Forecasting")
-st.caption("LSTM-based 72-hour pollutant forecasting with live API data")
+st.caption("LSTM-based 24-hour next-day AQI forecasting • 15 features • CPCB ground station data")
 
 with st.sidebar:
     st.header("⚙️ Settings")
     selected_loc = st.selectbox("📍 Location", list(LOCATIONS.keys()))
     run_btn = st.button("🚀 Run Forecast", use_container_width=True, type="primary")
+
+    st.markdown("---")
+    st.markdown("**📊 Model Info**")
+    st.markdown(f"- Forecast: **{FORECAST_HOURS}h** (next day)")
+    st.markdown(f"- Window: **{WINDOW_SIZE}h** (14 days)")
+    st.markdown(f"- Features: **15** (pollutants + weather + fire + temporal)")
+    st.markdown(f"- Architecture: **LSTM** (128→64)")
 
 if run_btn:
     model = load_forecast_model(selected_loc)
@@ -251,8 +327,9 @@ if run_btn:
         st.error(f"Model or scalers not found for {selected_loc}. Training may still be running.")
         st.stop()
 
-    with st.spinner("Fetching live data from Open-Meteo API..."):
-        live_df = fetch_live_data(selected_loc, days_back=21)
+    with st.spinner("Fetching live data..."):
+        result = fetch_live_data(selected_loc, days_back=21)
+        live_df, data_source = result if result[0] is not None else (None, "Unknown")
 
     if live_df is None or len(live_df) < WINDOW_SIZE:
         st.error("Could not fetch enough live data.")
@@ -266,59 +343,82 @@ if run_btn:
         predictions = calibrate_forecast(predictions, live_df)
 
     now = datetime.now()
+    target_date = now + timedelta(days=1)
 
-    # ========== 3-DAY FORECAST CARDS (with real dates) ==========
-    st.markdown('<div class="section-title">📅 3-Day AQI Forecast</div>', unsafe_allow_html=True)
-    cols = st.columns(3)
-    for day_idx in range(3):
-        day_data = predictions[day_idx * 24 : (day_idx + 1) * 24]
-        day_avg = day_data.mean(axis=0)
-        aqi, dominant, _ = calculate_aqi(day_avg[0], day_avg[1], day_avg[2], day_avg[3])
-        category = get_category(aqi)
-        advisory = get_health_advisory(category)
-        color = AQI_COLORS.get(category, "#FBBF24")
-        target_date = now + timedelta(days=day_idx + 1)
-        date_str = target_date.strftime("%b %d, %A")
+    # ========== FIRE COUNT STATUS ==========
+    today_fire = get_fire_count_for_date(now)
+    if today_fire > 100:
+        fire_class = "fire-high"
+        fire_text = f"🔥 High Stubble Burning: {today_fire:.0f} fires detected"
+    elif today_fire > 30:
+        fire_class = "fire-medium"
+        fire_text = f"🔥 Moderate Stubble Burning: {today_fire:.0f} fires"
+    else:
+        fire_class = "fire-low"
+        fire_text = f"✅ Low Stubble Burning: {today_fire:.0f} fires"
 
-        with cols[day_idx]:
-            st.markdown(f"""
-            <div class="forecast-card">
-                <div class="date-label">{date_str}</div>
-                <div class="aqi-big" style="color:{color};">{aqi}</div>
-                <div class="cat-label" style="color:{color};">{category}</div>
-                <div class="pollutant-info">Dominant: {dominant.upper()}</div>
-                <div class="advisory">{advisory}</div>
+    st.markdown(f'<div class="fire-badge {fire_class}">{fire_text}</div>'
+                f'<span class="data-source-badge">Data: {data_source}</span>',
+                unsafe_allow_html=True)
+
+    # ========== NEXT-DAY FORECAST CARD ==========
+    st.markdown('<div class="section-title">📅 Tomorrow\'s AQI Forecast</div>', unsafe_allow_html=True)
+
+    day_avg = predictions.mean(axis=0)
+    aqi, dominant, sub_indices = calculate_aqi(day_avg[0], day_avg[1], day_avg[2], day_avg[3])
+    category = get_category(aqi)
+    advisory = get_health_advisory(category)
+    color = AQI_COLORS.get(category, "#FBBF24")
+    date_str = target_date.strftime("%b %d, %A")
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown(f"""
+        <div class="forecast-card">
+            <div class="date-label">{date_str}</div>
+            <div class="aqi-big" style="color:{color};">{aqi}</div>
+            <div class="cat-label" style="color:{color};">{category}</div>
+            <div class="pollutant-info">
+                Dominant: {dominant.upper()} |
+                PM2.5: {day_avg[0]:.1f} | PM10: {day_avg[1]:.1f} |
+                CO: {day_avg[2]:.0f} | NO₂: {day_avg[3]:.1f}
             </div>
-            """, unsafe_allow_html=True)
+            <div class="advisory">{advisory}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # ========== HOURLY BREAKDOWN PER DAY ==========
-    st.markdown('<div class="section-title">⏰ Hourly Forecast Breakdown</div>', unsafe_allow_html=True)
-    for day_idx in range(3):
-        target_date = now + timedelta(days=day_idx + 1)
-        day_data = predictions[day_idx * 24 : (day_idx + 1) * 24]
+    # ========== HOURLY BREAKDOWN ==========
+    st.markdown('<div class="section-title">⏰ 24-Hour Forecast Breakdown</div>', unsafe_allow_html=True)
 
-        hourly_records = []
-        for h in range(len(day_data)):
-            hour_time = (target_date.replace(hour=0, minute=0, second=0) + timedelta(hours=h))
-            aqi_h, dom_h, _ = calculate_aqi(day_data[h][0], day_data[h][1], day_data[h][2], day_data[h][3])
-            hourly_records.append({
-                "Time": hour_time.strftime("%I %p"),
-                "PM2.5": f"{day_data[h][0]:.1f}",
-                "PM10": f"{day_data[h][1]:.1f}",
-                "CO": f"{day_data[h][2]:.0f}",
-                "NO2": f"{day_data[h][3]:.1f}",
-                "AQI": aqi_h,
-                "Category": get_category(aqi_h),
-            })
+    hourly_records = []
+    for h in range(len(predictions)):
+        hour_time = target_date.replace(hour=0, minute=0, second=0) + timedelta(hours=h)
+        aqi_h, dom_h, _ = calculate_aqi(
+            predictions[h][0], predictions[h][1], predictions[h][2], predictions[h][3]
+        )
+        hourly_records.append({
+            "Time": hour_time.strftime("%I %p"),
+            "PM2.5": f"{predictions[h][0]:.1f}",
+            "PM10": f"{predictions[h][1]:.1f}",
+            "CO": f"{predictions[h][2]:.0f}",
+            "NO₂": f"{predictions[h][3]:.1f}",
+            "AQI": aqi_h,
+            "Category": get_category(aqi_h),
+        })
 
-        with st.expander(f"📆 {target_date.strftime('%b %d, %A')} — Hourly Details", expanded=(day_idx == 0)):
-            st.dataframe(pd.DataFrame(hourly_records), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(hourly_records), use_container_width=True, hide_index=True)
 
-    # ========== SEPARATE POLLUTANT GRAPHS ==========
-    st.markdown('<div class="section-title">📈 Pollutant Trends (Next 72 Hours)</div>', unsafe_allow_html=True)
-    hours_index = [(now + timedelta(hours=h+1)).strftime("%b %d %I%p") for h in range(FORECAST_HOURS)]
+    # ========== POLLUTANT GRAPHS ==========
+    st.markdown(f'<div class="section-title">📈 Pollutant Trends (Next {FORECAST_HOURS} Hours)</div>',
+                unsafe_allow_html=True)
 
-    pollutant_labels = {"pm2_5": "PM2.5 (µg/m³)", "pm10": "PM10 (µg/m³)", "co": "CO (µg/m³)", "no2": "NO₂ (µg/m³)"}
+    hours_index = [(target_date.replace(hour=0, minute=0, second=0) + timedelta(hours=h)).strftime("%I %p")
+                   for h in range(FORECAST_HOURS)]
+
+    pollutant_labels = {
+        "pm2_5": "PM2.5 (µg/m³)", "pm10": "PM10 (µg/m³)",
+        "co": "CO (µg/m³)", "no2": "NO₂ (µg/m³)",
+    }
     chart_cols = st.columns(2)
     for idx, (key, label) in enumerate(pollutant_labels.items()):
         col_idx = POLLUTANTS.index(key)
@@ -328,7 +428,9 @@ if run_btn:
             st.line_chart(chart_df, height=250)
 
     # ========== BACKTESTING: ACTUAL vs PREDICTED ==========
-    st.markdown('<div class="section-title">🔍 Model Accuracy — Actual vs Predicted (Past 7 Days)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🔍 Model Accuracy — Actual vs Predicted (Past 7 Days)</div>',
+                unsafe_allow_html=True)
+
     with st.spinner("Running backtesting on past 7 days..."):
         backtest_df = run_backtesting(live_df, model, feature_scaler, target_scaler, days_back=7)
 

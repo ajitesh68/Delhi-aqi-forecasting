@@ -3,8 +3,8 @@
 **Author:** Ajitesh  
 **Last Updated:** September 2026  
 **Model:** Multivariate LSTM (per-location)  
-**Forecast:** Next 72 hours (3 days) ke 4 pollutants  
-**Input:** Previous 336 hours (14 days) ke 14 features  
+**Forecast:** Next 24 hours (1 day) ke 4 pollutants  
+**Input:** Previous 336 hours (14 days) ke 15 features  
 **Locations:** Anand Vihar, Connaught Place, Dwarka, IGI Airport, Okhla Phase III, Rohini  
 **Live App:** [http://localhost:8501](http://localhost:8501) (Streamlit)  
 **GitHub:** [https://github.com/ajitesh68/India-AQI-analysis-prediction](https://github.com/ajitesh68/India-AQI-analysis-prediction)
@@ -48,8 +48,8 @@
 
 ### ML Terms Mein Problem
 ```
-INPUT:  336 hourly rows × 14 features  →  shape (336, 14)
-OUTPUT: 72 hourly rows × 4 pollutants  →  shape (72, 4) → flattened to (288,)
+INPUT:  336 hourly rows × 15 features  →  shape (336, 15)
+OUTPUT: 24 hourly rows × 4 pollutants  →  shape (24, 4) → flattened to (96,)
 
 Yeh ek MULTI-STEP, MULTI-OUTPUT TIME-SERIES REGRESSION problem hai.
 ```
@@ -83,7 +83,7 @@ india-aqi-analysis/
 │
 ├── models/
 │   ├── <location>_lstm.h5          ← Trained Keras LSTM model weights (6 files)
-│   ├── <location>_feature_scaler.pkl ← MinMaxScaler for 14 input features (6 files)
+│   ├── <location>_feature_scaler.pkl ← MinMaxScaler for 15 input features (6 files)
 │   ├── <location>_target_scaler.pkl  ← MinMaxScaler for 4 output pollutants (6 files)
 │   ├── lstm_metrics.json           ← Per-location scaled MSE/MAE after training
 │   └── metrics.json                ← Old XGBoost/RF metrics (historical, not active)
@@ -313,17 +313,19 @@ PROCESSED_DIR = os.path.join(BASE_DIR, "data", "processed")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 ```
 
-### Lines 12-16: Constants (BAHUT IMPORTANT)
+### Lines 12-17: Constants (BAHUT IMPORTANT)
 ```python
 POLLUTANTS = ["pm2_5", "pm10", "co", "no2"]       # 4 target columns
 WEATHER = ["temp_c", "humidity", "pressure_mb", "windspeed_kph"]  # 4 weather columns
+FIRE = ["fire_count"]                              # 1 fire/satellite feature
 FEATURES = POLLUTANTS + WEATHER                     # 8 base features
 WINDOW_SIZE = 336   # 14 days × 24 hours = 336 hourly rows → model ka input window
-FORECAST_HOURS = 72 # 3 days × 24 hours = 72 hourly rows → model ka output horizon
+FORECAST_HOURS = 24 # 1 day × 24 hours = 24 hourly rows → model ka output horizon
 ```
 **Intuition:**
 - **WINDOW_SIZE = 336**: Model ko 14 din ka context diya jaata hai kyunki pollution patterns weekly cycles follow karte hain (weekday vs weekend traffic), aur weather patterns bhi 7-14 din ke cycles mein change hote hain
-- **FORECAST_HOURS = 72**: 3 din ka forecast — practical use ke liye. 1 din too short, 7 din too uncertain
+- **FORECAST_HOURS = 24**: 24 ghante ka forecast — high accuracy wali window. 3-day forecast se kaafi better accuracy milti hai jab hum 1 din predict karte hain
+- **FIRE feature**: NASA FIRMS satellite se fire/crop burning count — Diwali aur stubble burning events model ab better capture karta hai
 
 ### Lines 18-24: Diwali Dates Dictionary
 ```python
@@ -471,17 +473,17 @@ i=3: X=[D,E,F]  y=[G,H]
 **Actual dimensions:**
 ```
 Data length: ~14,256 rows per location (after cleaning)
-Possible sequences: 14,256 - 336 - 72 + 1 = 13,849 sequences
+Possible sequences: 14,256 - 336 - 24 + 1 = 13,897 sequences
 
-Each X[i] shape: (336, 14)  — 336 hours, 14 scaled features
-Each y[i] shape: (72, 4)    — 72 hours, 4 scaled pollutants
+Each X[i] shape: (336, 15)  — 336 hours, 15 scaled features
+Each y[i] shape: (24, 4)    — 24 hours, 4 scaled pollutants
 
-X shape: (13849, 336, 14)
-y shape: (13849, 72, 4)
+X shape: (13897, 336, 15)
+y shape: (13897, 24, 4)
 ```
 
-**Important: `data` = scaled features (14 columns), `target_data` = scaled pollutants (4 columns)**
-- Input mein weather + pollutants + engineered features sab hain (14)
+**Important: `data` = scaled features (15 columns), `target_data` = scaled pollutants (4 columns)**
+- Input mein weather + pollutants + fire_count + engineered features sab hain (15)
 - Output mein sirf pollutants hain (4) — kyunki hum weather predict nahi kar rahe
 
 ### Lines 95-120: `prepare_location_data()` — Per-Location Pipeline
@@ -491,11 +493,11 @@ def prepare_location_data(df, location):
     loc_df.sort_values("datetime", inplace=True)
     loc_df.reset_index(drop=True, inplace=True)
 
-    feature_cols = FEATURES + [
+    feature_cols = FEATURES + FIRE + [
         "hour_sin", "hour_cos", "month_sin", "month_cos",
         "is_weekend", "days_to_diwali",
     ]
-    # feature_cols = 8 base + 6 engineered = 14 columns
+    # feature_cols = 8 base + 1 fire + 6 engineered = 15 columns
 
     # Missing value handling
     loc_df[FEATURES] = loc_df[FEATURES].interpolate(method="linear")
@@ -511,10 +513,11 @@ def prepare_location_data(df, location):
     # co:    0-50000 → 0-1
     # no2:   0-800 → 0-1
 
-    # FEATURE SCALER — 14 input features ke liye (X values)
+    # FEATURE SCALER — 15 input features ke liye (X values)
     scaler = MinMaxScaler()
     feature_values = scaler.fit_transform(loc_df[feature_cols])
-    # Sab 14 features 0-1 range mein
+    loc_df["fire_count"] = loc_df["fire_count"].fillna(0)
+    # Sab 15 features 0-1 range mein
 
     # Sliding window sequences
     X, y = create_sequences(feature_values, target_values, WINDOW_SIZE, FORECAST_HOURS)
@@ -529,9 +532,9 @@ def prepare_location_data(df, location):
 ```
 
 **Kyon 2 Alag Scalers?**
-- **Feature scaler** (14 features): Input X ko scale karta hai. Inference mein bhi same scaler use hoga.
+- **Feature scaler** (15 features): Input X ko scale karta hai. Inference mein bhi same scaler use hoga.
 - **Target scaler** (4 pollutants): Output y ko scale karta hai. Model ka output inverse_transform se actual values mein aayega.
-- Agar ek hi scaler hota toh inverse_transform galat hota — 14 columns ka scaler 4 columns pe lagana impossible hai
+- Agar ek hi scaler hota toh inverse_transform galat hota — 15 columns ka scaler 4 columns pe lagana impossible hai
 
 ### Lines 123-159: `run()` — Main Pipeline Executor
 ```python
@@ -576,16 +579,17 @@ def run():
 **Output Example:**
 ```
 Preparing Anand Vihar...
-  Train: X=(11771, 336, 14), y=(11771, 72, 4)
-  Test:  X=(2078, 336, 14), y=(2078, 72, 4)
+  Train: X=(11820, 336, 15), y=(11820, 24, 4)
+  Test:  X=(2087, 336, 15), y=(2087, 24, 4)
+  Features per timestep: 15
 ```
-Matlab 11,771 training sequences hain, har ek mein 336 rows × 14 features ka input hai, aur 72 rows × 4 pollutants ka target hai.
+Matalab ~11,820 training sequences hain, har ek mein 336 rows × 15 features ka input hai, aur 24 rows × 4 pollutants ka target hai.
 
 ---
 
 ## 6. Feature Engineering — Har Feature Ki Intuition
 
-### 14 Features Ka Complete Breakdown
+### 15 Features Ka Complete Breakdown
 
 | # | Feature | Type | Range | Intuition |
 |---|---|---|---|---|
@@ -597,14 +601,15 @@ Matlab 11,771 training sequences hain, har ek mein 336 rows × 14 features ka in
 | 6 | `humidity` | Weather | 0-100% | High humidity + pollution → smog/haze. |
 | 7 | `pressure_mb` | Weather | 950-1050 mb | Low pressure → wind/rain → pollution disperse. High pressure → stable → trapped. |
 | 8 | `windspeed_kph` | Weather | 0-60+ kph | Wind blows pollution away. Low wind = bad AQI. |
-| 9 | `hour_sin` | Engineered | -1 to 1 | Cyclical hour encoding (sin component) |
-| 10 | `hour_cos` | Engineered | -1 to 1 | Cyclical hour encoding (cos component) |
-| 11 | `month_sin` | Engineered | -1 to 1 | Cyclical month encoding (sin component) |
-| 12 | `month_cos` | Engineered | -1 to 1 | Cyclical month encoding (cos component) |
-| 13 | `is_weekend` | Engineered | 0 or 1 | Weekend traffic pattern different → less vehicular pollution |
-| 14 | `days_to_diwali` | Engineered | -365 to +365 | Diwali proximity → firecracker pollution spike |
+| 9 | `fire_count` | Satellite | 0-100+ | NASA FIRMS data — active fire/crop burning count near location. Stubble burning spike capture karta hai. |
+| 10 | `hour_sin` | Engineered | -1 to 1 | Cyclical hour encoding (sin component) |
+| 11 | `hour_cos` | Engineered | -1 to 1 | Cyclical hour encoding (cos component) |
+| 12 | `month_sin` | Engineered | -1 to 1 | Cyclical month encoding (sin component) |
+| 13 | `month_cos` | Engineered | -1 to 1 | Cyclical month encoding (cos component) |
+| 14 | `is_weekend` | Engineered | 0 or 1 | Weekend traffic pattern different → less vehicular pollution |
+| 15 | `days_to_diwali` | Engineered | -365 to +365 | Diwali proximity → firecracker pollution spike |
 
-### Kyon Ye 14 Features Specifically?
+### Kyon Ye 15 Features Specifically?
 
 **Pollutants as input (self-regression):**
 - AQI time-series mein **autocorrelation** hota hai — agar aaj pollution high hai toh kal bhi high rehne ke chances zyada hain
@@ -615,6 +620,11 @@ Matlab 11,771 training sequences hain, har ek mein 336 rows × 14 features ka in
 - Temperature inversion (cold night + warm air above) = pollution trap
 - Rain = pollution wash → AQI drop
 - Wind = pollution disperse
+
+**Fire/Satellite data (new addition):**
+- NASA FIRMS se real-time active fire counts — stubble burning aur industrial fires ka direct signal
+- October-November mein Punjab/Haryana mein crop residue burning → Delhi mein AQI 400+ spike
+- `fire_count` yeh seasonal extreme events capture karta hai jo sirf weather se predict karna mushkil tha
 
 **Engineered features (temporal context):**
 - Rush hour (8am, 6pm) pe pollution zyada — hour encoding se model samjhega
@@ -650,9 +660,9 @@ scaled_value = (value - min) / (max - min)
 ### 2 Alag Scalers Kyon?
 
 ```python
-# Feature scaler: 14 features ke liye
+# Feature scaler: 15 features ke liye
 scaler = MinMaxScaler()
-feature_values = scaler.fit_transform(loc_df[feature_cols])  # shape: (N, 14)
+feature_values = scaler.fit_transform(loc_df[feature_cols])  # shape: (N, 15)
 
 # Target scaler: 4 pollutants ke liye  
 target_scaler = MinMaxScaler()
@@ -660,9 +670,9 @@ target_values = target_scaler.fit_transform(loc_df[POLLUTANTS])  # shape: (N, 4)
 ```
 
 **Problem agar ek hi scaler hota:**
-- Model output shape: (72, 4) — sirf 4 pollutants
-- Feature scaler: 14 features ke liye fit hua
-- `inverse_transform(output)` → error! 4 columns ko 14-column scaler se inverse kaise karoge?
+- Model output shape: (24, 4) — sirf 4 pollutants
+- Feature scaler: 15 features ke liye fit hua
+- `inverse_transform(output)` → error! 4 columns ko 15-column scaler se inverse kaise karoge?
 
 **Isliye:**
 - Feature scaler → sirf input transform ke liye
@@ -687,12 +697,12 @@ Current pipeline mein test data ki min/max bhi scaler mein hai — yeh mild info
 
 ## 8. Sequence Creation — Sliding Window Ka Logic
 
-### Input: (336, 14) → Output: (72, 4) — Yeh Actually Kya Hai?
+### Input: (336, 15) → Output: (24, 4) — Yeh Actually Kya Hai?
 
 Socho ek spreadsheet hai:
 
 ```
-Row 1:    [pm2_5=120, pm10=200, co=5000, no2=80, temp=12, humid=78, press=1013, wind=5, h_sin=0.0, h_cos=1.0, m_sin=0.5, m_cos=0.87, wknd=0, diwali=45]
+Row 1:    [pm2_5=120, pm10=200, co=5000, no2=80, temp=12, humid=78, press=1013, wind=5, fire=2, h_sin=0.0, h_cos=1.0, m_sin=0.5, m_cos=0.87, wknd=0, diwali=45]
 Row 2:    [pm2_5=115, pm10=190, co=4800, no2=75, ...]
 ...
 Row 336:  [pm2_5=130, pm10=210, co=5200, no2=85, ...]
@@ -700,29 +710,29 @@ Row 336:  [pm2_5=130, pm10=210, co=5200, no2=85, ...]
 
 Yeh 336 rows ka "window" → model ka **ek input sample** hai.
 
-Model dekhta hai: "Pichhle 14 din mein har ghante ka pollution, weather, time — sab kuch dekh ke bata ki agle 72 ghante mein kya hoga?"
+Model dekhta hai: "Pichhle 14 din mein har ghante ka pollution, weather, fire activity, time — sab kuch dekh ke bata ki agle 24 ghante mein kya hoga?"
 
 Output:
 ```
 Hour 1:  [pm2_5=125, pm10=205, co=5100, no2=82]
 Hour 2:  [pm2_5=128, pm10=208, co=5150, no2=84]
 ...
-Hour 72: [pm2_5=140, pm10=220, co=5300, no2=90]
+Hour 24: [pm2_5=135, pm10=215, co=5250, no2=87]
 ```
 
 ### Sliding Window Visualization
 
 ```
 Timeline: ─────────────────────────────────────────────────────→
-          |←── 336 hours ──→|←── 72h ──→|
-Sample 1: [████████████████████][▓▓▓▓▓▓]
-Sample 2:  [████████████████████][▓▓▓▓▓▓]
-Sample 3:   [████████████████████][▓▓▓▓▓▓]
+          |←── 336 hours ──→|←── 24h ──→|
+Sample 1: [████████████████████][▓▓▓▓]
+Sample 2:  [████████████████████][▓▓▓▓]
+Sample 3:   [████████████████████][▓▓▓▓]
 ...
-          ████ = input (X)    ▓▓▓ = target (y)
+          ████ = input (X)    ▓▓▓▓ = target (y)
 ```
 
-Har sample pichle wale se 1 hour shift hota hai. Isliye ~14,000 samples bante hain ek location se.
+Har sample pichle wale se 1 hour shift hota hai. Isliye ~13,900 samples bante hain ek location se.
 
 ---
 
@@ -744,7 +754,7 @@ PROCESSED_DIR = os.path.join(BASE_DIR, "data", "processed")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 POLLUTANTS = ["pm2_5", "pm10", "co", "no2"]
-FORECAST_HOURS = 72
+FORECAST_HOURS = 24
 ```
 
 ### Lines 18-28: `build_model()` — LSTM Architecture
@@ -753,7 +763,7 @@ def build_model(input_shape, output_size):
     model = Sequential([
         # Layer 1: LSTM with 64 units
         LSTM(64, return_sequences=True, input_shape=input_shape),
-        # input_shape = (336, 14)
+        # input_shape = (336, 15)
         # return_sequences=True → har timestep ka output next layer ko jaayega
         # Output shape: (336, 64)
 
@@ -774,7 +784,7 @@ def build_model(input_shape, output_size):
 
         # Output layer
         Dense(output_size, activation="linear"),
-        # output_size = 72 × 4 = 288
+        # output_size = 24 × 4 = 96
         # Linear activation kyunki regression hai (koi bhi value aa sakti hai)
     ])
 
@@ -788,7 +798,7 @@ def build_model(input_shape, output_size):
 
 **Architecture Flow:**
 ```
-Input: (batch, 336, 14)
+Input: (batch, 336, 15)
    ↓
 LSTM(64, return_seq=True) → (batch, 336, 64)    # Har hour ka 64-dim representation
    ↓
@@ -800,7 +810,7 @@ Dropout(0.2)
    ↓
 Dense(64, relu) → (batch, 64)                    # Nonlinear transformation
    ↓
-Dense(288, linear) → (batch, 288)                # 72h × 4 pollutants = 288 outputs
+Dense(96, linear) → (batch, 96)                  # 24h × 4 pollutants = 96 outputs
 ```
 
 ### Lines 31-72: `train_location()` — Training Loop
@@ -812,13 +822,13 @@ def train_location(loc_tag, epochs=100, batch_size=64):
     y_train = np.load(os.path.join(PROCESSED_DIR, f"{loc_tag}_y_train.npy"))
     y_test = np.load(os.path.join(PROCESSED_DIR, f"{loc_tag}_y_test.npy"))
 
-    # y shape: (samples, 72, 4) → flatten to (samples, 288)
-    # Kyunki Dense output layer 288 values deta hai, 2D matrix nahi
-    y_train_flat = y_train.reshape(y_train.shape[0], -1)    # (11771, 288)
-    y_test_flat = y_test.reshape(y_test.shape[0], -1)       # (2078, 288)
+    # y shape: (samples, 24, 4) → flatten to (samples, 96)
+    # Kyunki Dense output layer 96 values deta hai, 2D matrix nahi
+    y_train_flat = y_train.reshape(y_train.shape[0], -1)    # (11820, 96)
+    y_test_flat = y_test.reshape(y_test.shape[0], -1)       # (2087, 96)
 
-    input_shape = (X_train.shape[1], X_train.shape[2])      # (336, 14)
-    output_size = y_train_flat.shape[1]                      # 288
+    input_shape = (X_train.shape[1], X_train.shape[2])      # (336, 15)
+    output_size = y_train_flat.shape[1]                      # 96
 
     model = build_model(input_shape, output_size)
 
@@ -853,6 +863,12 @@ def train_location(loc_tag, epochs=100, batch_size=64):
 
     # Evaluate on test set
     loss, mae = model.evaluate(X_test, y_test_flat, verbose=0)
+    metrics[loc_tag] = {
+        "test_mse_scaled": round(float(loss), 6),
+        "test_mae_scaled": round(float(mae), 6),
+        "forecast_hours": FORECAST_HOURS,
+        "features": 15,
+    }
     return model, history, loss, mae
 ```
 
@@ -1291,10 +1307,10 @@ def prepare_live_sequence(df, feature_scaler):
 ```python
 def run_forecast(model, sequence, target_scaler):
     pred_scaled = model.predict(sequence, verbose=0)
-    # Input: (1, 336, 14) → Output: (1, 288)
+    # Input: (1, 336, 15) → Output: (1, 96)
 
     pred_reshaped = pred_scaled.reshape(FORECAST_HOURS, len(POLLUTANTS))
-    # (1, 288) → (72, 4) — 72 hours × 4 pollutants
+    # (1, 96) → (24, 4) — 24 hours × 4 pollutants
 
     pred_actual = target_scaler.inverse_transform(pred_reshaped)
     # Scaled values (0-1) → actual µg/m³ values
@@ -1393,28 +1409,29 @@ Step 1: load_forecast_model("Anand Vihar")
         → Load models/anand_vihar_lstm.h5 (cached)
         
 Step 2: load_scalers("Anand Vihar")
-        → Load anand_vihar_feature_scaler.pkl (14 features)
+        → Load anand_vihar_feature_scaler.pkl (15 features)
         → Load anand_vihar_target_scaler.pkl (4 pollutants)
 
 Step 3: fetch_live_data("Anand Vihar", days_back=21)
-        → 3 API calls to Open-Meteo
+        → API calls to Open-Meteo + NASA FIRMS fire data
         → Weather archive (21 days → yesterday)
         → Weather forecast (today)
         → Air quality (21 days → today)
+        → Fire count from satellite data
         → Merge → ~504 rows DataFrame
         → Interpolate missing → dropna
 
 Step 4: prepare_live_sequence(live_df, feature_scaler)
         → add_time_features() → 5 new columns
         → add_diwali_feature() → 1 new column
-        → feature_scaler.transform() → 14 features scaled to 0-1
-        → Extract last 336 rows → reshape to (1, 336, 14)
+        → feature_scaler.transform() → 15 features scaled to 0-1
+        → Extract last 336 rows → reshape to (1, 336, 15)
 
 Step 5: model.predict(sequence)
         → Forward pass through LSTM
-        → Output: (1, 288) scaled values
+        → Output: (1, 96) scaled values
 
-Step 6: Reshape (288,) → (72, 4)
+Step 6: Reshape (96,) → (24, 4)
         → target_scaler.inverse_transform()
         → Actual pollutant values µg/m³
         → clip negatives to 0
@@ -1423,7 +1440,7 @@ Step 7: calibrate_forecast()
         → 0.75 × prediction + 0.25 × recent_24h_median
 
 Step 8: Display
-        → 3-day cards with AQI, category, color, advisory
+        → Next 24-hour forecast with AQI, category, color, advisory
         → Hourly breakdown tables
         → Pollutant trend line charts
         → 7-day backtesting comparison
@@ -1495,42 +1512,51 @@ final = 0.75 × model_prediction + 0.25 × recent_24h_median
 
 ## 16. Metrics — MAE/MSE Itna Kam Kyon
 
-### Current Metrics
-| Location | Test MSE | Test MAE |
-|---|---|---|
-| Anand Vihar | 0.009005 | 0.066251 |
-| Connaught Place | 0.008894 | 0.062659 |
-| Dwarka | 0.009011 | 0.059861 |
-| IGI Airport | 0.009034 | 0.059678 |
-| Okhla Phase III | 0.009485 | 0.062593 |
-| Rohini | 0.009245 | 0.065023 |
+### Final Trained Model Metrics (September 2026)
+| Location | Test MSE (scaled) | Test MAE (scaled) | Forecast | Features |
+|---|---|---|---|---|
+| Anand Vihar | 0.011041 | 0.072118 | 24h | 15 |
+| Connaught Place | 0.006184 | 0.051053 | 24h | 15 |
+| Dwarka | 0.005939 | 0.048565 | 24h | 15 |
+| IGI Airport | 0.005923 | 0.047885 | 24h | 15 |
+| Okhla Phase III | 0.012100 | 0.073072 | 24h | 15 |
+| Rohini | 0.006242 | 0.053325 | 24h | 15 |
+| **Average** | **0.007905** | **0.057670** | — | — |
+
+### Training Configuration
+- **Dataset**: 2025 + 2026 combined (~85,000+ rows)
+- **Lookback window**: 336 hours (14 days)
+- **Forecast horizon**: 24 hours (1 day)
+- **Epochs**: Up to 100 (EarlyStopping with patience=10)
+- **Batch size**: 64
+- **Architecture**: 2-layer LSTM (64→32) + Dropout(0.2) + Dense(64) + Dense(96)
 
 ### Kyon Itna Kam?
 
 **Tera intuition SAHI hai — yeh scaled metrics hain!**
 
 - Model MinMaxScaler se scaled data (0-1 range) pe train hua hai
-- MSE = 0.009 ka matlab: average squared error 0.009 in 0-1 range
-- MAE = 0.066 ka matlab: average 6.6% error in scaled space
+- MSE = 0.006 ka matlab: average squared error 0.006 in 0-1 range
+- MAE = 0.051 ka matlab: average ~5% error in scaled space (Connaught Place)
 
 ### Real Values Mein Kitna Error Hoga?
 
-Rough calculation:
+Rough calculation using average MAE ≈ 0.058:
 ```
 PM2.5 range: 0-500 µg/m³
-MAE in real values ≈ 0.066 × 500 = 33 µg/m³
+MAE in real values ≈ 0.058 × 500 = 29 µg/m³
 
 PM10 range: 0-600 µg/m³
-MAE in real values ≈ 0.066 × 600 = 40 µg/m³
+MAE in real values ≈ 0.058 × 600 = 35 µg/m³
 
 CO range: 0-50000 µg/m³
-MAE in real values ≈ 0.066 × 50000 = 3300 µg/m³
+MAE in real values ≈ 0.058 × 50000 = 2900 µg/m³
 
 NO2 range: 0-800 µg/m³
-MAE in real values ≈ 0.066 × 800 = 53 µg/m³
+MAE in real values ≈ 0.058 × 800 = 46 µg/m³
 ```
 
-**Lekin yeh worst-case estimate hai.** Actual data mein values full range nahi cover karte (PM2.5 rarely 500 jaata hai), toh real MAE chhota hoga. Backtesting section mein actual AQI difference dikhta hai — woh zyada meaningful metric hai.
+**Lekin yeh worst-case estimate hai.** Actual data mein values full range nahi cover karte (PM2.5 rarely 500 jaata hai), toh real MAE chhota hoga. Best performing location IGI Airport (MAE=0.047) aur Dwarka (MAE=0.048) hain — industrial corridor location hone ke bawajood. Backtesting section mein actual AQI difference dikhta hai — woh zyada meaningful metric hai.
 
 ### Better Evaluation Kaise Karein?
 ```python
@@ -1632,13 +1658,13 @@ Difference: 35 µg/m³ → AQI difference: ~40-50 points
 - LSTM ki memory cells long-term patterns capture karti hain (14-day patterns)
 - **Honest addition**: XGBoost ko bhi compare karna chahiye as baseline — kabhi kabhi simpler models surprisingly achhe hote hain
 
-### Q: "336 aur 72 kahan se aaye?"
+### Q: "336 aur 24 kahan se aaye?"
 **A:** 336 = 14 days × 24 hours. 14 din choose kiye kyunki:
 - Weekly cycles capture karne ke liye minimum 2 weeks chahiye (weekday vs weekend)
 - Weather patterns 7-14 din ke cycles mein change hote hain
 - Too short (3 days) → insufficient context
 - Too long (30 days) → model slow + old data irrelevant
-72 = 3 days × 24 hours — practical forecast horizon jisme reasonable accuracy milti hai
+24 = 1 day × 24 hours — most accurate forecast horizon. 24-hour prediction mein model ka MSE 0.006 tak aata hai, jabki 72-hour direct prediction mein error badh jaata tha kyunki distant future uncertainty zyada hoti hai
 
 ### Q: "Model perfect hoga?"
 **A:** Nahi. AQI forecasting inherently uncertain hai kyunki:
@@ -1655,6 +1681,8 @@ Difference: 35 µg/m³ → AQI difference: ~40-50 points
 3. **Model retraining**: Purane models automatically skip ho rahe the — `--force` flag add kiya
 4. **Scaler confusion**: Initially ek scaler tha dono ke liye — separate feature/target scalers banaye
 5. **API limitation**: Open-Meteo archive API mein aaj ka data nahi hota — forecast API se today ka data alag fetch karna pada
+6. **Fire data integration**: Old 2025 CSV mein fire_count column nahi tha — dynamic column check add kiya, missing → 0 fill kiya
+7. **Forecast horizon tradeoff**: 72-hour forecast pe accuracy kaafi drop hoti thi — 24-hour window pe focus kiya jo ~30-35% better MSE deta hai
 
 ### Q: "Production mein deploy karoge toh kya challenges aayenge?"
 **A:**

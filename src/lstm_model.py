@@ -1,3 +1,4 @@
+
 import numpy as np
 import os
 import argparse
@@ -12,19 +13,21 @@ PROCESSED_DIR = os.path.join(BASE_DIR, "data", "processed")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 POLLUTANTS = ["pm2_5", "pm10", "co", "no2"]
-FORECAST_HOURS = 72
+FORECAST_HOURS = 24
 
 
 def build_model(input_shape, output_size):
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
+        LSTM(128, return_sequences=True, input_shape=input_shape),
         Dropout(0.2),
-        LSTM(32, return_sequences=False),
+        LSTM(64, return_sequences=False),
         Dropout(0.2),
-        Dense(64, activation="relu"),
+        Dense(128, activation="relu"),
+        Dropout(0.1),
         Dense(output_size, activation="linear"),
     ])
-    model.compile(optimizer=Adam(learning_rate=0.001), loss="mse", metrics=["mae"])
+    optimizer = Adam(learning_rate=0.001, clipnorm=1.0)
+    model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
     return model
 
 
@@ -41,7 +44,7 @@ def train_location(loc_tag, epochs=100, batch_size=64):
     output_size = y_train_flat.shape[1]
 
     print(f"Input shape: {input_shape}")
-    print(f"Output size: {output_size}")
+    print(f"Output size: {output_size} (expected: {FORECAST_HOURS}×{len(POLLUTANTS)}={FORECAST_HOURS*len(POLLUTANTS)})")
     print(f"Train samples: {len(X_train)}, Test samples: {len(X_test)}")
 
     model = build_model(input_shape, output_size)
@@ -97,6 +100,8 @@ def train_all(force=False, epochs=100, batch_size=64):
             "test_mae_scaled": round(float(mae), 6),
             "epochs_requested": epochs,
             "batch_size": batch_size,
+            "forecast_hours": FORECAST_HOURS,
+            "features": 15,
         }
 
     metrics_path = os.path.join(MODELS_DIR, "lstm_metrics.json")

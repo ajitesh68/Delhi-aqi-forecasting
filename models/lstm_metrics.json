@@ -1,38 +1,50 @@
 {
   "anand_vihar": {
-    "test_mse_scaled": 0.009005,
-    "test_mae_scaled": 0.066251,
+    "test_mse_scaled": 0.011041,
+    "test_mae_scaled": 0.072118,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   },
   "connaught_place": {
-    "test_mse_scaled": 0.008894,
-    "test_mae_scaled": 0.062659,
+    "test_mse_scaled": 0.006184,
+    "test_mae_scaled": 0.051053,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   },
   "dwarka": {
-    "test_mse_scaled": 0.009011,
-    "test_mae_scaled": 0.059861,
+    "test_mse_scaled": 0.005939,
+    "test_mae_scaled": 0.048565,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   },
   "igi_airport": {
-    "test_mse_scaled": 0.009034,
-    "test_mae_scaled": 0.059678,
+    "test_mse_scaled": 0.005923,
+    "test_mae_scaled": 0.047885,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   },
   "okhla_phase_iii": {
-    "test_mse_scaled": 0.009485,
-    "test_mae_scaled": 0.062593,
+    "test_mse_scaled": 0.0121,
+    "test_mae_scaled": 0.073072,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   },
   "rohini": {
-    "test_mse_scaled": 0.009245,
-    "test_mae_scaled": 0.065023,
+    "test_mse_scaled": 0.006242,
+    "test_mae_scaled": 0.053325,
     "epochs_requested": 100,
-    "batch_size": 64
+    "batch_size": 64,
+    "forecast_hours": 24,
+    "features": 15
   }
 }
