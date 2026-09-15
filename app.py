@@ -1,450 +1,574 @@
-"""
-Delhi AQI Forecasting Dashboard — v2
+"""Delhi AQI — live CPCB ground-station dashboard."""
 
-Key upgrades:
-- 24-hour next-day forecast (was 72h/3-day)
-- CPCB ground station data via OpenAQ (was satellite estimates)
-- Fire count (stubble burning) display
-- Detailed hourly breakdown for the next 24 hours
-- Improved backtesting accuracy
-"""
-
-import streamlit as st
 import pandas as pd
-import numpy as np
-import os
-import requests
-import joblib
-from datetime import datetime, timedelta
-from tensorflow.keras.models import load_model
-from src.aqi_formula import calculate_aqi, get_category, get_health_advisory
-from src.prepare_lstm_data import (
-    POLLUTANTS, WEATHER, FIRE, FEATURES, WINDOW_SIZE, FORECAST_HOURS,
-    add_time_features, add_diwali_feature,
-)
-from src.fire_data import get_fire_count_for_date
+import streamlit as st
 
-st.set_page_config(
-    page_title="Delhi AQI Forecasting",
-    page_icon="🌬️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
+                   layout="wide", initial_sidebar_state="expanded")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, "models")
+from src import analysis, data_loader, maps, metrics, styles, visualizations as viz
+from src.aqi import get_category, health_advisory
+from src.config import AQI_COLORS, NCR_CITIES, POLLUTANT_LABELS
+from src.metrics import SENSITIVITY
 
-LOCATIONS = {
-    "Anand Vihar": {"lat": 28.6469, "lon": 77.316},
-    "Connaught Place": {"lat": 28.6315, "lon": 77.2167},
-    "Dwarka": {"lat": 28.5921, "lon": 77.0460},
-    "IGI Airport": {"lat": 28.5562, "lon": 77.1000},
-    "Okhla Phase III": {"lat": 28.5308, "lon": 77.2713},
-    "Rohini": {"lat": 28.7495, "lon": 77.0565},
-}
-
-AQI_COLORS = {
-    "Good": "#10B981",
-    "Satisfactory": "#34D399",
-    "Moderate": "#FBBF24",
-    "Poor": "#F97316",
-    "Very Poor": "#EF4444",
-    "Severe": "#7F1D1D",
-}
-
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-    .stApp { font-family: 'Inter', sans-serif; }
-    .forecast-card {
-        background: rgba(30, 41, 59, 0.85);
-        border-radius: 16px;
-        padding: 24px;
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(255,255,255,0.08);
-        text-align: center;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        margin-bottom: 12px;
-    }
-    .forecast-card h3 { margin: 0 0 4px 0; font-size: 1rem; opacity: 0.7; }
-    .forecast-card .date-label { font-size: 1.1rem; font-weight: 700; margin-bottom: 10px; }
-    .forecast-card .aqi-big { font-size: 3rem; font-weight: 800; margin: 8px 0; }
-    .forecast-card .cat-label { font-size: 1.1rem; font-weight: 600; }
-    .forecast-card .pollutant-info { font-size: 0.85rem; opacity: 0.75; margin-top: 8px; }
-    .forecast-card .advisory { font-size: 0.82rem; opacity: 0.65; margin-top: 6px; }
-    .section-title { font-size: 1.3rem; font-weight: 700; margin: 28px 0 12px 0; }
-    .fire-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        font-weight: 600;
-        margin-top: 8px;
-    }
-    .fire-high { background: #EF4444; color: white; }
-    .fire-medium { background: #F97316; color: white; }
-    .fire-low { background: #10B981; color: white; }
-    .data-source-badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 8px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        background: rgba(59, 130, 246, 0.2);
-        color: #60A5FA;
-        margin-left: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+styles.inject(st)
 
 
-def _load_env():
-    """Load API keys from .env file."""
-    env_path = os.path.join(BASE_DIR, ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    key, val = line.split("=", 1)
-                    os.environ[key.strip()] = val.strip().strip('"').strip("'")
+def card(body):
+    st.markdown(f'<div class="glass">{body}</div>', unsafe_allow_html=True)
 
 
-_load_env()
+def pill(text, kind="muted"):
+    return f'<span class="pill pill-{kind}">{text}</span>'
 
 
-@st.cache_resource
-def load_forecast_model(location):
-    loc_tag = location.lower().replace(" ", "_")
-    model_path = os.path.join(MODELS_DIR, f"{loc_tag}_lstm.h5")
-    if not os.path.exists(model_path):
-        return None
-    return load_model(model_path, compile=False)
+def short(name):
+    return str(name).split(",")[0].strip()
 
 
-@st.cache_data(ttl=3600)
-def load_scalers(location):
-    loc_tag = location.lower().replace(" ", "_")
-    f_path = os.path.join(MODELS_DIR, f"{loc_tag}_feature_scaler.pkl")
-    t_path = os.path.join(MODELS_DIR, f"{loc_tag}_target_scaler.pkl")
-    if not os.path.exists(f_path) or not os.path.exists(t_path):
-        return None, None
-    return joblib.load(f_path), joblib.load(t_path)
+# ----------------------------------------------------------------- load
 
+include_ncr = st.sidebar.toggle(
+    "Include wider NCR", value=False,
+    help="Adds Noida, Ghaziabad, Gurugram and Faridabad. The open data.gov.in "
+         "key returns 10 records per request, so each extra city adds a few "
+         "seconds on a cold cache.")
+cities = tuple(NCR_CITIES) if include_ncr else ("Delhi",)
 
-@st.cache_data(ttl=1800)
-def fetch_live_data(location, days_back=21):
-    """Fetch live data: weather from Open-Meteo, air quality from Open-Meteo."""
-    coords = LOCATIONS[location]
-    today = datetime.now()
-    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    start_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    today_str = today.strftime("%Y-%m-%d")
-    data_source = "Open-Meteo"
+with st.spinner(f"Reading live CPCB stations ({', '.join(cities[:2])}"
+                f"{'...' if len(cities) > 2 else ''})..."):
+    stations, meta = data_loader.live_stations(cities)
 
-    try:
-        # --- 1. Historical weather from archive API (up to yesterday) ---
-        w_archive = requests.get(
-            "https://archive-api.open-meteo.com/v1/archive",
-            params={
-                "latitude": coords["lat"], "longitude": coords["lon"],
-                "start_date": start_date, "end_date": yesterday,
-                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m",
-                "timezone": "Asia/Kolkata",
-            }, timeout=30
-        ).json()
+status = data_loader.store_status()
+summary = data_loader.city_summary(stations)
 
-        # --- 2. Today's weather from forecast API ---
-        w_forecast = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": coords["lat"], "longitude": coords["lon"],
-                "start_date": today_str, "end_date": today_str,
-                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m",
-                "timezone": "Asia/Kolkata",
-            }, timeout=30
-        ).json()
-
-        # Merge weather data
-        w_times = w_archive["hourly"]["time"] + w_forecast.get("hourly", {}).get("time", [])
-        w_temp = w_archive["hourly"]["temperature_2m"] + w_forecast.get("hourly", {}).get("temperature_2m", [])
-        w_hum = w_archive["hourly"]["relative_humidity_2m"] + w_forecast.get("hourly", {}).get("relative_humidity_2m", [])
-        w_pres = w_archive["hourly"]["surface_pressure"] + w_forecast.get("hourly", {}).get("surface_pressure", [])
-        w_wind = w_archive["hourly"]["wind_speed_10m"] + w_forecast.get("hourly", {}).get("wind_speed_10m", [])
-
-        weather_df = pd.DataFrame({
-            "datetime": pd.to_datetime(w_times),
-            "temp_c": w_temp,
-            "humidity": w_hum,
-            "pressure_mb": w_pres,
-            "windspeed_kph": w_wind,
-        })
-
-        # --- 3. Air quality data from Open-Meteo ---
-        a_resp = requests.get(
-            "https://air-quality-api.open-meteo.com/v1/air-quality",
-            params={
-                "latitude": coords["lat"], "longitude": coords["lon"],
-                "start_date": start_date, "end_date": today_str,
-                "hourly": "pm2_5,pm10,carbon_monoxide,nitrogen_dioxide",
-                "timezone": "Asia/Kolkata",
-            }, timeout=30
-        ).json()
-
-        aq_df = pd.DataFrame({
-            "datetime": pd.to_datetime(a_resp["hourly"]["time"]),
-            "pm2_5": a_resp["hourly"]["pm2_5"],
-            "pm10": a_resp["hourly"]["pm10"],
-            "co": a_resp["hourly"]["carbon_monoxide"],
-            "no2": a_resp["hourly"]["nitrogen_dioxide"],
-        })
-
-        # --- 4. Merge weather + air quality on datetime ---
-        df = pd.merge(weather_df, aq_df, on="datetime", how="inner")
-        df["location"] = location
-
-        # --- 5. Add fire count (daily resolution) ---
-        df["date_only"] = df["datetime"].dt.date
-        fire_counts = {}
-        for d in df["date_only"].unique():
-            fire_counts[d] = get_fire_count_for_date(pd.Timestamp(d))
-
-        df["fire_count"] = df["date_only"].map(fire_counts).fillna(0)
-        df.drop(columns=["date_only"], inplace=True)
-
-        # Interpolate and clean
-        all_cols = FEATURES + FIRE
-        df[all_cols] = df[all_cols].interpolate(method="linear")
-        df.dropna(subset=FEATURES, inplace=True)
-        df["fire_count"] = df["fire_count"].fillna(0)
-
-        return df, data_source
-
-    except Exception as e:
-        st.error(f"API Error: {e}")
-        return None, data_source
-
-
-def prepare_live_sequence(df, feature_scaler):
-    df_copy = df.copy()
-    df_copy = add_time_features(df_copy)
-    df_copy = add_diwali_feature(df_copy)
-
-    feature_cols = FEATURES + FIRE + [
-        "hour_sin", "hour_cos", "month_sin", "month_cos",
-        "is_weekend", "days_to_diwali",
-    ]
-
-    df_copy[feature_cols] = feature_scaler.transform(df_copy[feature_cols])
-    values = df_copy[feature_cols].values
-
-    if len(values) < WINDOW_SIZE:
-        st.error(f"Not enough data. Need {WINDOW_SIZE} hours, got {len(values)}.")
-        return None
-
-    seq = values[-WINDOW_SIZE:]
-    return seq.reshape(1, WINDOW_SIZE, len(feature_cols))
-
-
-def run_forecast(model, sequence, target_scaler):
-    pred_scaled = model.predict(sequence, verbose=0)
-    pred_reshaped = pred_scaled.reshape(FORECAST_HOURS, len(POLLUTANTS))
-    pred_actual = target_scaler.inverse_transform(pred_reshaped)
-    pred_actual = np.clip(pred_actual, 0, None)
-    return pred_actual
-
-
-def calibrate_forecast(predictions, live_df):
-    """Reduce short-term distribution shift using the latest observed pollutants."""
-    recent = live_df[POLLUTANTS].tail(24).median().to_numpy(dtype=float)
-    if not np.isfinite(recent).all():
-        return predictions
-    return np.clip(0.75 * predictions + 0.25 * recent, 0, None)
-
-
-def run_backtesting(df, model, feature_scaler, target_scaler, days_back=7):
-    results = []
-    total_hours = len(df)
-
-    for day_offset in range(days_back, 0, -1):
-        end_idx = total_hours - (day_offset * 24)
-        if end_idx < WINDOW_SIZE:
-            continue
-
-        slice_df = df.iloc[:end_idx].copy()
-        seq = prepare_live_sequence(slice_df, feature_scaler)
-        if seq is None:
-            continue
-
-        pred = run_forecast(model, seq, target_scaler)
-        # For 24h forecast, use full day average
-        pred_day_avg = pred.mean(axis=0)
-        pred_aqi, _, _ = calculate_aqi(pred_day_avg[0], pred_day_avg[1], pred_day_avg[2], pred_day_avg[3])
-
-        actual_start = end_idx
-        actual_end = min(end_idx + 24, total_hours)
-        if actual_end <= actual_start:
-            continue
-
-        actual_slice = df.iloc[actual_start:actual_end]
-        actual_avg = actual_slice[POLLUTANTS].mean()
-        actual_aqi, _, _ = calculate_aqi(actual_avg["pm2_5"], actual_avg["pm10"], actual_avg["co"], actual_avg["no2"])
-
-        target_date = df.iloc[actual_start]["datetime"]
-        results.append({
-            "Date": target_date.strftime("%b %d"),
-            "Day": target_date.strftime("%A"),
-            "Predicted AQI": pred_aqi,
-            "Actual AQI": actual_aqi,
-            "Difference": abs(pred_aqi - actual_aqi),
-        })
-
-    return pd.DataFrame(results)
-
-
-# ==================== MAIN UI ====================
-
-st.title("🌬️ Delhi AQI Forecasting")
-st.caption("LSTM-based 24-hour next-day AQI forecasting • 15 features • CPCB ground station data")
+# ----------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.header("⚙️ Settings")
-    selected_loc = st.selectbox("📍 Location", list(LOCATIONS.keys()))
-    run_btn = st.button("🚀 Run Forecast", use_container_width=True, type="primary")
+    st.markdown("### Delhi Air")
+    st.caption("Ground-station readings from the CPCB / DPCC monitoring "
+               "network, not a satellite model.")
+
+    station_names = sorted(stations["station"].dropna().unique()) if len(stations) else []
+    default = next((i for i, s in enumerate(station_names) if "Anand Vihar" in s), 0)
+    selected = st.selectbox("Station", station_names, index=default,
+                            format_func=short) if station_names else None
+
+    group = st.selectbox("Who is this for?", list(SENSITIVITY.keys()))
 
     st.markdown("---")
-    st.markdown("**📊 Model Info**")
-    st.markdown(f"- Forecast: **{FORECAST_HOURS}h** (next day)")
-    st.markdown(f"- Window: **{WINDOW_SIZE}h** (14 days)")
-    st.markdown(f"- Features: **15** (pollutants + weather + fire + temporal)")
-    st.markdown(f"- Architecture: **LSTM** (128→64)")
+    st.markdown("**Data sources**")
+    if meta.get("stale"):
+        st.warning("Live feed unreachable — showing the last cached sweep.", icon="⚠️")
+    elif meta.get("from_cache") and meta.get("cache_age_min") is not None:
+        st.caption(f"Served from a sweep {meta['cache_age_min']:.0f} minutes old. "
+                   f"The CPCB feed publishes hourly, so this is current.")
+    st.caption(
+        f"Live: data.gov.in CPCB feed — {meta.get('total_stations', 0)} stations, "
+        f"{meta.get('with_aqi', 0)} with a full AQI.\n\n"
+        f"History: OpenAQ CPCB archive — "
+        + (f"{status['rows']:,} hours across {status['stations']} stations."
+           if not status["empty"] else "still downloading.")
+    )
+    if meta.get("co_unit") == "unknown":
+        st.caption("CO is excluded from AQI here: the feed reports it in units "
+                   "that cannot be resolved, and guessing risks a 1000x error.")
 
-if run_btn:
-    model = load_forecast_model(selected_loc)
-    feature_scaler, target_scaler = load_scalers(selected_loc)
+# ----------------------------------------------------------------- header
 
-    if model is None or feature_scaler is None:
-        st.error(f"Model or scalers not found for {selected_loc}. Training may still be running.")
-        st.stop()
+left, right = st.columns([3, 2])
+with left:
+    st.markdown("# Delhi is breathing")
+    if summary:
+        reporting = f"{summary['n_reporting']} of {summary['n_total']} stations reporting"
+        updated = pd.Timestamp(summary["updated"]).strftime("%d %b, %H:%M")
+        st.markdown(
+            f"{pill('CPCB ground stations', 'live')} "
+            f"{pill(reporting)} {pill('updated ' + updated)}",
+            unsafe_allow_html=True)
+with right:
+    if summary and summary["spread"] > 0:
+        st.markdown(
+            f'<div class="glass" style="text-align:center">'
+            f'<div class="eyebrow">Spread across the city right now</div>'
+            f'<div class="metric-value" style="color:{styles.ACCENT}">'
+            f'{summary["spread"]} AQI</div>'
+            f'<div class="metric-sub">{short(summary["best_station"])} '
+            f'{summary["best_aqi"]} &nbsp;&rarr;&nbsp; '
+            f'{short(summary["worst_station"])} {summary["worst_aqi"]}. '
+            f'A single city-wide number hides this.</div></div>',
+            unsafe_allow_html=True)
 
-    with st.spinner("Fetching live data..."):
-        result = fetch_live_data(selected_loc, days_back=21)
-        live_df, data_source = result if result[0] is not None else (None, "Unknown")
+st.markdown("")
 
-    if live_df is None or len(live_df) < WINDOW_SIZE:
-        st.error("Could not fetch enough live data.")
-        st.stop()
+if len(stations) == 0:
+    st.error("No live station data available right now, and no cached sweep to "
+             "fall back on. The CPCB feed may be rate-limited — try again shortly.")
+    st.stop()
 
-    with st.spinner("Running LSTM forecast..."):
-        seq = prepare_live_sequence(live_df, feature_scaler)
-        if seq is None:
-            st.stop()
-        predictions = run_forecast(model, seq, target_scaler)
-        predictions = calibrate_forecast(predictions, live_df)
+# ----------------------------------------------------------------- hero row
 
-    now = datetime.now()
-    target_date = now + timedelta(days=1)
+row = stations[stations["station"] == selected].iloc[0] if selected else None
 
-    # ========== FIRE COUNT STATUS ==========
-    today_fire = get_fire_count_for_date(now)
-    if today_fire > 100:
-        fire_class = "fire-high"
-        fire_text = f"🔥 High Stubble Burning: {today_fire:.0f} fires detected"
-    elif today_fire > 30:
-        fire_class = "fire-medium"
-        fire_text = f"🔥 Moderate Stubble Burning: {today_fire:.0f} fires"
+c1, c2, c3 = st.columns([1.1, 1, 1])
+
+with c1:
+    if row is not None and pd.notna(row["aqi"]):
+        colour = AQI_COLORS.get(row["category"], styles.MUTED)
+        card(f'<div class="eyebrow">{short(selected)}</div>'
+             f'<div class="hero-aqi" style="color:{colour}">{int(row["aqi"])}</div>'
+             f'<div class="hero-cat" style="color:{colour}">{row["category"]}</div>'
+             f'<div class="metric-sub">Driven by '
+             f'<b>{row["dominant_label"]}</b>. {health_advisory(row["category"])}</div>')
+    elif row is not None:
+        card(f'<div class="eyebrow">{short(selected)}</div>'
+             f'<div class="hero-aqi" style="color:{styles.MUTED}">--</div>'
+             f'<div class="metric-sub">{row["aqi_reason"] or "No reading"}. '
+             f'CPCB needs three pollutants including a PM measurement.</div>')
+
+with c2:
+    pm25 = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else None
+    cigs = metrics.cigarette_equivalent(pm25) if pm25 else None
+    who = metrics.who_multiple(pm25) if pm25 else None
+    if cigs is not None:
+        card(f'<div class="eyebrow">A day in this air</div>'
+             f'<div class="metric-value">{cigs:g} <span style="font-size:1.1rem;'
+             f'font-weight:600;opacity:.6">cigarettes</span></div>'
+             f'<div class="metric-sub">PM2.5 is {pm25:.0f} µg/m³, about '
+             f'<b>{who}x</b> the WHO daily guideline. Equivalence follows '
+             f'Berkeley Earth: 22 µg/m³ over 24 h is roughly one cigarette.</div>')
     else:
-        fire_class = "fire-low"
-        fire_text = f"✅ Low Stubble Burning: {today_fire:.0f} fires"
+        card('<div class="eyebrow">A day in this air</div>'
+             '<div class="metric-value" style="opacity:.4">--</div>'
+             '<div class="metric-sub">This station is not reporting PM2.5 right now.</div>')
 
-    st.markdown(f'<div class="fire-badge {fire_class}">{fire_text}</div>'
-                f'<span class="data-source-badge">Data: {data_source}</span>',
-                unsafe_allow_html=True)
-
-    # ========== NEXT-DAY FORECAST CARD ==========
-    st.markdown('<div class="section-title">📅 Tomorrow\'s AQI Forecast</div>', unsafe_allow_html=True)
-
-    day_avg = predictions.mean(axis=0)
-    aqi, dominant, sub_indices = calculate_aqi(day_avg[0], day_avg[1], day_avg[2], day_avg[3])
-    category = get_category(aqi)
-    advisory = get_health_advisory(category)
-    color = AQI_COLORS.get(category, "#FBBF24")
-    date_str = target_date.strftime("%b %d, %A")
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(f"""
-        <div class="forecast-card">
-            <div class="date-label">{date_str}</div>
-            <div class="aqi-big" style="color:{color};">{aqi}</div>
-            <div class="cat-label" style="color:{color};">{category}</div>
-            <div class="pollutant-info">
-                Dominant: {dominant.upper()} |
-                PM2.5: {day_avg[0]:.1f} | PM10: {day_avg[1]:.1f} |
-                CO: {day_avg[2]:.0f} | NO₂: {day_avg[3]:.1f}
-            </div>
-            <div class="advisory">{advisory}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ========== HOURLY BREAKDOWN ==========
-    st.markdown('<div class="section-title">⏰ 24-Hour Forecast Breakdown</div>', unsafe_allow_html=True)
-
-    hourly_records = []
-    for h in range(len(predictions)):
-        hour_time = target_date.replace(hour=0, minute=0, second=0) + timedelta(hours=h)
-        aqi_h, dom_h, _ = calculate_aqi(
-            predictions[h][0], predictions[h][1], predictions[h][2], predictions[h][3]
-        )
-        hourly_records.append({
-            "Time": hour_time.strftime("%I %p"),
-            "PM2.5": f"{predictions[h][0]:.1f}",
-            "PM10": f"{predictions[h][1]:.1f}",
-            "CO": f"{predictions[h][2]:.0f}",
-            "NO₂": f"{predictions[h][3]:.1f}",
-            "AQI": aqi_h,
-            "Category": get_category(aqi_h),
-        })
-
-    st.dataframe(pd.DataFrame(hourly_records), use_container_width=True, hide_index=True)
-
-    # ========== POLLUTANT GRAPHS ==========
-    st.markdown(f'<div class="section-title">📈 Pollutant Trends (Next {FORECAST_HOURS} Hours)</div>',
-                unsafe_allow_html=True)
-
-    hours_index = [(target_date.replace(hour=0, minute=0, second=0) + timedelta(hours=h)).strftime("%I %p")
-                   for h in range(FORECAST_HOURS)]
-
-    pollutant_labels = {
-        "pm2_5": "PM2.5 (µg/m³)", "pm10": "PM10 (µg/m³)",
-        "co": "CO (µg/m³)", "no2": "NO₂ (µg/m³)",
-    }
-    chart_cols = st.columns(2)
-    for idx, (key, label) in enumerate(pollutant_labels.items()):
-        col_idx = POLLUTANTS.index(key)
-        chart_df = pd.DataFrame({label: predictions[:, col_idx]}, index=hours_index)
-        with chart_cols[idx % 2]:
-            st.markdown(f"**{label}**")
-            st.line_chart(chart_df, height=250)
-
-    # ========== BACKTESTING: ACTUAL vs PREDICTED ==========
-    st.markdown('<div class="section-title">🔍 Model Accuracy — Actual vs Predicted (Past 7 Days)</div>',
-                unsafe_allow_html=True)
-
-    with st.spinner("Running backtesting on past 7 days..."):
-        backtest_df = run_backtesting(live_df, model, feature_scaler, target_scaler, days_back=7)
-
-    if len(backtest_df) > 0:
-        col_bt1, col_bt2 = st.columns([2, 1])
-        with col_bt1:
-            chart_bt = backtest_df.set_index("Date")[["Predicted AQI", "Actual AQI"]]
-            st.line_chart(chart_bt, height=300)
-        with col_bt2:
-            st.dataframe(backtest_df, use_container_width=True, hide_index=True)
-            avg_diff = backtest_df["Difference"].mean()
-            st.metric("Avg Error", f"±{avg_diff:.0f} AQI")
+with c3:
+    score = metrics.activity_safety_score(row["aqi"], group) if row is not None and pd.notna(row["aqi"]) else None
+    headline, detail = metrics.activity_verdict(score)
+    if score is not None:
+        tone = "#22C55E" if score >= 6.5 else "#FBBF24" if score >= 4.5 else "#EF4444"
+        card(f'<div class="eyebrow">Outdoors for a {group.lower()}</div>'
+             f'<div class="metric-value" style="color:{tone}">{score}'
+             f'<span style="font-size:1.1rem;font-weight:600;opacity:.5">/10</span></div>'
+             f'<div class="metric-sub"><b>{headline}.</b> {detail}</div>')
     else:
-        st.info("Not enough historical data for backtesting comparison.")
+        card(f'<div class="eyebrow">Outdoors for a {group.lower()}</div>'
+             f'<div class="metric-value" style="opacity:.4">--</div>'
+             f'<div class="metric-sub">{detail}</div>')
 
-else:
-    st.info("👈 Select a location and click **Run Forecast** to see predictions.")
+st.markdown("")
+
+# ----------------------------------------------------------------- tabs
+
+(tab_live, tab_when, tab_forecast, tab_history,
+ tab_health, tab_about) = st.tabs(
+    ["Live map", "When to go out", "Tomorrow", "History",
+     "Your exposure", "How this works"])
+
+# --- live map -------------------------------------------------------
+
+with tab_live:
+    view = st.radio("View", ["Stations", "Heatmap", "3D columns"],
+                    horizontal=True, label_visibility="collapsed")
+    m1, m2 = st.columns([2, 1])
+    with m1:
+        deck = {"Stations": maps.station_map, "Heatmap": maps.heatmap,
+                "3D columns": maps.column_map}[view](stations)
+        if deck is not None:
+            st.pydeck_chart(deck, use_container_width=True)
+        else:
+            st.info("No stations with coordinates to map yet.")
+        if view == "Heatmap":
+            st.markdown('<div class="note">The coloured surface is an '
+                        'interpolation between monitors, not a measurement. '
+                        'The white dots are the actual stations.</div>',
+                        unsafe_allow_html=True)
+
+    with m2:
+        st.markdown("**Cleanest air right now**")
+        ranked = stations.dropna(subset=["aqi"]).sort_values("aqi")
+        for i, (_, s) in enumerate(ranked.head(5).iterrows(), 1):
+            c = AQI_COLORS.get(s["category"], styles.MUTED)
+            st.markdown(
+                f'<div class="rank-row"><span class="rank-num">{i}</span>'
+                f'<span class="rank-name">{short(s["station"])}</span>'
+                f'<span class="rank-aqi" style="color:{c}">{int(s["aqi"])}</span></div>',
+                unsafe_allow_html=True)
+
+        st.markdown("**Worst right now**")
+        for i, (_, s) in enumerate(ranked.tail(5).iloc[::-1].iterrows(), 1):
+            c = AQI_COLORS.get(s["category"], styles.MUTED)
+            st.markdown(
+                f'<div class="rank-row"><span class="rank-num">{i}</span>'
+                f'<span class="rank-name">{short(s["station"])}</span>'
+                f'<span class="rank-aqi" style="color:{c}">{int(s["aqi"])}</span></div>',
+                unsafe_allow_html=True)
+
+    st.plotly_chart(
+        viz.station_ranking_chart(
+            stations.dropna(subset=["aqi"])[["station", "aqi"]].rename(
+                columns={"aqi": "mean"}),
+            highlight=selected,
+            title="Every reporting station, ranked"),
+        use_container_width=True)
+
+# --- when to go out -------------------------------------------------
+
+with tab_when:
+    st.markdown("### When should I go outside?")
+    if status["empty"]:
+        st.info("Building the answer from real CPCB history — the archive "
+                "download is still running. This will fill in automatically.")
+    else:
+        hist = data_loader.history(stations=[selected] if selected else None, days=120)
+        if len(hist) == 0 and selected:
+            st.info(f"No stored history for {short(selected)} yet. The archive "
+                    "download covers a subset of stations first.")
+            hist = data_loader.history(days=120)
+
+        profile = analysis.diurnal_profile(hist, by=None)
+        if len(profile) == 0:
+            st.info("Not enough stored hours yet to build an hourly profile.")
+        else:
+            best_hours = profile.nsmallest(3, "mean")["hour"].tolist()
+            lo, hi = min(best_hours), max(best_hours)
+            worst = profile.loc[profile["mean"].idxmax()]
+            best = profile.loc[profile["mean"].idxmin()]
+
+            w1, w2 = st.columns([1, 2])
+            with w1:
+                card(f'<div class="eyebrow">Typically cleanest</div>'
+                     f'<div class="metric-value" style="color:#4ADE80">'
+                     f'{int(best["hour"]):02d}:00</div>'
+                     f'<div class="metric-sub">Average AQI <b>{best["mean"]:.0f}</b> '
+                     f'at this hour, against <b>{worst["mean"]:.0f}</b> at '
+                     f'{int(worst["hour"]):02d}:00 — a difference of '
+                     f'<b>{worst["mean"] - best["mean"]:.0f} AQI</b> for the same day.'
+                     f'</div>')
+                st.markdown("")
+                card('<div class="eyebrow">Read this correctly</div>'
+                     '<div class="metric-sub">This is the average shape of a day '
+                     'from real station readings, not a forecast for tomorrow. '
+                     'It is built from <b>raw hourly</b> readings, not the '
+                     'official 24-hour CPCB index &mdash; a 24-hour rolling mean '
+                     'flattens the daily cycle to almost nothing, so it cannot '
+                     'answer this question.</div>')
+            with w2:
+                st.plotly_chart(
+                    viz.diurnal_chart(profile, best_window=(lo, hi),
+                                      title=f"Hour-by-hour, {short(selected) if selected else 'Delhi'}"),
+                    use_container_width=True)
+
+            st.markdown("**Safety score through the day**")
+            profile = profile.copy()
+            profile["score"] = [metrics.activity_safety_score(v, group)
+                                for v in profile["mean"]]
+            cols = st.columns(12)
+            for i, (_, p) in enumerate(profile.iterrows()):
+                if i % 2:
+                    continue
+                s = p["score"]
+                tone = "#22C55E" if s >= 6.5 else "#FBBF24" if s >= 4.5 else "#EF4444"
+                with cols[(i // 2) % 12]:
+                    st.markdown(
+                        f'<div style="text-align:center;padding:6px 0">'
+                        f'<div style="font-size:.66rem;color:{styles.MUTED}">'
+                        f'{int(p["hour"]):02d}h</div>'
+                        f'<div style="font-size:1.05rem;font-weight:800;color:{tone}">'
+                        f'{s:g}</div></div>', unsafe_allow_html=True)
+
+# --- history --------------------------------------------------------
+
+with tab_history:
+    st.markdown("### What the record shows")
+    st.markdown('<div class="note">Everything on this tab is computed from '
+                'observed CPCB station readings. The forecasting model plays '
+                'no part in any of these charts.</div>', unsafe_allow_html=True)
+    st.markdown("")
+
+    if status["empty"]:
+        st.info("The CPCB archive download is still running. Historical charts "
+                "appear as soon as the first station lands.")
+    else:
+        period = st.radio("Period", ["Daily", "Weekly", "Monthly", "Patterns"],
+                          horizontal=True, label_visibility="collapsed")
+        hist = data_loader.history(days=None)
+
+        st.caption(f"{status['rows']:,} observed hours · "
+                   f"{status['stations']} stations · "
+                   f"{status['first']:%d %b %Y} to {status['last']:%d %b %Y}")
+
+        if period == "Daily":
+            daily = analysis.daily_summary(hist, by="station")
+            daily = daily[~daily["sparse"]]
+            st.plotly_chart(
+                viz.timeseries_chart(
+                    daily.rename(columns={"date": "datetime", "mean": "aqi"}),
+                    by="station", title="Daily mean AQI", height=400),
+                use_container_width=True)
+            st.caption("Days with fewer than 12 observed hours are excluded "
+                       "rather than averaged from thin data.")
+
+        elif period == "Weekly":
+            weekly = analysis.weekly_summary(hist, by="station")
+            st.plotly_chart(
+                viz.timeseries_chart(
+                    weekly.rename(columns={"week": "datetime", "mean": "aqi"}),
+                    by="station", title="Weekly mean AQI", height=400),
+                use_container_width=True)
+
+        elif period == "Monthly":
+            monthly = analysis.monthly_summary(hist, by=None)
+            st.plotly_chart(viz.monthly_chart(monthly), use_container_width=True)
+            yoy = analysis.year_over_year(hist)
+            st.plotly_chart(viz.year_over_year_chart(yoy), use_container_width=True)
+            if len(yoy) and yoy.attrs.get("doy_range"):
+                lo, hi = yoy.attrs["doy_range"]
+                st.caption(f"Restricted to days {lo}-{hi} of the year, the window "
+                           "both years actually cover, so a partial year is not "
+                           "compared against a full one.")
+
+        else:
+            p1, p2 = st.columns(2)
+            with p1:
+                st.plotly_chart(viz.day_of_week_chart(analysis.day_of_week_effect(hist)),
+                                use_container_width=True)
+            with p2:
+                mix = analysis.pollutant_mix(hist, window_hours=24 * 30)
+                st.plotly_chart(
+                    viz.pollutant_radar(mix, title="What drives AQI here (30 days)"),
+                    use_container_width=True)
+
+            seasonal = analysis.seasonal_windows(hist)
+            if len(seasonal):
+                st.markdown("**Diwali windows, measured**")
+                st.dataframe(seasonal, use_container_width=True, hide_index=True)
+
+# --- exposure -------------------------------------------------------
+
+with tab_health:
+    st.markdown("### Your day, not the city's")
+    st.markdown('<div class="note">A city-wide AQI is not your exposure. '
+                'Where you spend your hours matters more than the headline '
+                'number.</div>', unsafe_allow_html=True)
+    st.markdown("")
+
+    e1, e2 = st.columns([1, 1.3])
+    with e1:
+        names = sorted(stations["station"].dropna().unique())
+        home = st.selectbox("Home area", names, index=default, format_func=short)
+        work = st.selectbox("Work area", names,
+                            index=min(1, len(names) - 1), format_func=short)
+        hours_out = st.slider("Hours outdoors (commute, walking)", 0.0, 8.0, 2.0, 0.5)
+        hours_work = st.slider("Hours at work", 0.0, 14.0, 8.0, 0.5)
+        indoor = st.slider("Indoor air as a fraction of outdoor", 0.2, 1.0, 0.55, 0.05,
+                           help="An unfiltered Indian home or office typically "
+                                "sits near 0.5-0.6. A running purifier pushes it lower.")
+
+    def pm_of(name):
+        sel = stations[stations["station"] == name]
+        if len(sel) == 0 or pd.isna(sel.iloc[0].get("pm2_5")):
+            return None
+        return float(sel.iloc[0]["pm2_5"])
+
+    home_pm, work_pm = pm_of(home), pm_of(work)
+    commute_pm = max(v for v in [home_pm, work_pm, 0] if v is not None)
+    hours_home = max(0.0, 24 - hours_work - hours_out)
+
+    with e2:
+        if home_pm is None and work_pm is None:
+            st.info("Neither selected station is reporting PM2.5 right now.")
+        else:
+            result = metrics.commute_exposure(
+                home_pm or 0, work_pm or 0, commute_pm,
+                hours_home=hours_home, hours_work=hours_work,
+                hours_commute=hours_out, indoor_factor=indoor)
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Effective PM2.5", f"{result['mean_pm25']:.0f}")
+            k2.metric("Cigarettes today", f"{result['cigarettes']:g}")
+            k3.metric("WHO guideline", f"{result['who_multiple']}x")
+            st.plotly_chart(viz.exposure_chart(result["breakdown"]),
+                            use_container_width=True)
+            share = result["breakdown"]["Commute (outdoor)"] / max(result["ug_hours"], 1)
+            st.markdown(
+                f'<div class="note">Those {hours_out:g} outdoor hours are '
+                f'{hours_out / 24 * 100:.0f}% of your day but '
+                f'<b>{share * 100:.0f}%</b> of your PM2.5 intake. Shifting them '
+                f'to a cleaner hour is the cheapest thing you can change.</div>',
+                unsafe_allow_html=True)
+
+# --- about ----------------------------------------------------------
+
+# --- tomorrow ------------------------------------------------------
+
+with tab_forecast:
+    st.markdown("## The next 24 hours")
+
+    forecast = data_loader.forecast_24h(selected) if selected else None
+
+    if forecast is not None:
+        last_seen = pd.Timestamp(forecast["last_observed"])
+        lag_hours = (pd.Timestamp.now() - last_seen).total_seconds() / 3600
+        if lag_hours > 6:
+            st.warning(
+                f"This forecasts the 24 hours after **{last_seen:%d %b, %H:%M}**, "
+                f"which is {lag_hours / 24:.0f} days ago — not the 24 hours after "
+                f"now. The OpenAQ archive runs several days behind, and the model "
+                f"needs a continuous week of readings to forecast from, so it can "
+                f"only start where the record ends. Running "
+                f"`scripts/collect_snapshot.py` hourly closes that gap within a "
+                f"week, after which this becomes a genuine forecast.",
+                icon="🕐")
+
+    if forecast is None:
+        st.info(
+            "No forecast for this station yet. The model is trained on the "
+            "stations whose full history has been downloaded, and it needs "
+            "seven unbroken days of recent readings to forecast from. "
+            "Stations outside that set show measurements only.")
+    else:
+        frame = forecast["frame"]
+        card_col, chart_col = st.columns([1, 2.2])
+
+        with chart_col:
+            st.plotly_chart(
+                viz.forecast_chart(
+                    frame["datetime"], frame["aqi"],
+                    observed=data_loader.history([selected], days=5),
+                    title=(f"{short(selected)}: "
+                           f"{frame['datetime'].iloc[0]:%d %b %H:%M} to "
+                           f"{frame['datetime'].iloc[-1]:%d %b %H:%M}")),
+                use_container_width=True)
+
+        with card_col:
+            peak = frame.loc[frame["aqi"].idxmax()] if frame["aqi"].notna().any() else None
+            if peak is not None:
+                colour = AQI_COLORS.get(peak["category"], styles.MUTED)
+                card(f'<div class="eyebrow">Worst hour ahead</div>'
+                     f'<div class="metric-value" style="color:{colour}">'
+                     f'{int(peak["aqi"])}</div>'
+                     f'<div class="metric-sub"><b>{peak["category"]}</b> around '
+                     f'{pd.Timestamp(peak["datetime"]):%H:%M}. '
+                     f'Forecast PM2.5 peaks near '
+                     f'{frame["pm2_5"].max():.0f} µg/m³.</div>')
+
+            observed_pct = forecast["frac_observed"]
+            beyond = forecast["frac_beyond_training"]
+            tone = "live" if observed_pct > 0.9 else "stale"
+            st.markdown(
+                f'<div class="glass">'
+                f'<div class="eyebrow">How much to trust this</div>'
+                f'<div class="metric-sub">'
+                f'{pill(f"{observed_pct:.0%} observed input", tone)} '
+                f'{pill(f"{beyond:.0%} beyond training range")}<br/><br/>'
+                f'The input window was {observed_pct:.0%} real readings. '
+                + ("A meaningful share of recent hours sit outside anything "
+                   "the model was trained on, so treat this as indicative."
+                   if beyond > 0.15 else
+                   "Recent conditions are within the range the model has seen.")
+                + '</div></div>', unsafe_allow_html=True)
+
+        st.markdown("")
+        scorecard = forecast.get("scorecard")
+        if scorecard:
+            model = scorecard["scores"]["model"]
+            base = scorecard["scores"]["persistence"]
+            beats = scorecard["beats_persistence"]
+            s1, s2, s3 = st.columns(3)
+            with s1:
+                card(f'<div class="eyebrow">Error on unseen winter</div>'
+                     f'<div class="metric-value">{model["mae"]:.0f}'
+                     f'<span style="font-size:1rem;opacity:.5"> µg/m³</span></div>'
+                     f'<div class="metric-sub">Mean absolute error forecasting '
+                     f'PM2.5 24 hours ahead through January 2026, a month held '
+                     f'out of training entirely.</div>')
+            with s2:
+                verdict = "better than" if beats else "worse than"
+                tone = "#22C55E" if beats else "#EF4444"
+                card(f'<div class="eyebrow">Against doing nothing</div>'
+                     f'<div class="metric-value" style="color:{tone}">'
+                     f'{abs(scorecard["improvement_pct"]):.1f}%</div>'
+                     f'<div class="metric-sub">{verdict} assuming tomorrow '
+                     f'repeats today ({base["mae"]:.0f} µg/m³). That baseline '
+                     f'is strong at this horizon, which is why it is the '
+                     f'bar rather than a formality.</div>')
+            with s3:
+                card(f'<div class="eyebrow">On the worst hours</div>'
+                     f'<div class="metric-value">{model["top_decile_mae"]:.0f}'
+                     f'<span style="font-size:1rem;opacity:.5"> µg/m³</span></div>'
+                     f'<div class="metric-sub">Error across the dirtiest 10% of '
+                     f'hours, against {base["top_decile_mae"]:.0f} for the '
+                     f'baseline. Severe episodes are the hardest to call and '
+                     f'the ones that matter.</div>')
+
+            st.caption(
+                f"Trained on {scorecard['train_windows']:,} windows from "
+                f"{len(scorecard['stations'])} stations and scored on "
+                f"{scorecard['holdout_windows']:,} windows in January 2026. "
+                "The model predicts a departure from persistence rather than a "
+                "level, and reads the next 24 hours of forecast weather — wind, "
+                "temperature and boundary-layer height — which is the only "
+                "thing it knows that persistence does not.")
+
+        st.caption(
+            "One honest limitation: the model is trained on a single Delhi "
+            "winter, so it under-predicts the sharpest peaks. Compare the "
+            "forecast range against the observed line before relying on it "
+            "during a severe episode.")
+
+with tab_about:
+    st.markdown("### How this works, and what it cannot do")
+    a1, a2 = st.columns(2)
+    with a1:
+        st.markdown("""
+**Where the numbers come from**
+
+Live readings are the CPCB / DPCC ground-station feed published through
+data.gov.in — the same monitors that produce the official bulletin.
+Historical hours come from the OpenAQ archive of the same network.
+
+Open-Meteo is still used, but only for weather. Its air-quality product
+is a coarse chemistry-transport model; measured against these stations at
+Anand Vihar it correlates **0.40** with hourly PM2.5 and is off by an
+average of 32 µg/m³. That is why pollutants are not taken from it.
+
+**AQI is computed the way CPCB computes it**
+
+Sub-indices run on rolling averages — 24 hours for PM2.5, PM10, NO₂, SO₂
+and NH₃, 8 hours for CO and O₃ — not on instantaneous readings. A valid
+AQI needs at least three pollutants, one of which must be PM. When a
+station cannot meet that bar the AQI is shown as unavailable instead of
+being computed from whatever happens to be reporting.
+        """)
+    with a2:
+        st.markdown("""
+**What is deliberately missing**
+
+CO is dropped from the AQI when its units cannot be resolved. CPCB
+publishes CO in mg/m³, OpenAQ relabels the same numbers as ppb, and the
+two feeds disagree by a factor that is neither 1 nor 1000. Guessing would
+risk a 1000x error, so an unresolvable reading is discarded.
+
+Stubble-fire counts are not a model input. The previous version generated
+them from a hardcoded seasonal curve whenever the satellite feed was
+unavailable, which is a duplicate of the month-of-year signal wearing a
+physics costume.
+
+**Honest limits**
+
+Coverage is uneven: stations drop pollutants for hours at a time, and
+periods built from thin data are marked rather than quietly averaged.
+The heatmap interpolates between monitors and is not a measurement.
+        """)
+
+    if not status["empty"]:
+        st.markdown("---")
+        st.markdown("**Store contents**")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Observed hours", f"{status['rows']:,}")
+        s2.metric("Stations", status["stations"])
+        s3.metric("Earliest", f"{status['first']:%b %Y}")
+        s4.metric("Archive lag", f"{status['lag_hours']:.0f} h")
+        st.caption("The archive runs a few days behind live because that is how "
+                   "quickly the upstream network republishes. Live values on the "
+                   "map are current; historical charts end where the archive does.")

@@ -1,0 +1,33 @@
+{
+  "trained_at": "2026-09-15T20:41:30",
+  "epochs_run": 22,
+  "train_windows": 8970,
+  "holdout_windows": 456,
+  "holdout": {
+    "start": "2026-01-01 00:00:00",
+    "end": "2026-02-01 00:00:00"
+  },
+  "stations": [
+    "Anand Vihar, New Delhi - DPCC",
+    "Dwarka-Sector 8, Delhi - DPCC",
+    "ITO, New Delhi - CPCB",
+    "Jahangirpuri, Delhi - DPCC",
+    "Mundka, Delhi - DPCC",
+    "Punjabi Bagh, Delhi - DPCC",
+    "R K Puram, Delhi - DPCC"
+  ],
+  "scores": {
+    "model": {
+      "mae": 49.4441252542518,
+      "rmse": 65.25283885299233,
+      "top_decile_mae": 107.25764899513938
+    },
+    "persistence": {
+      "mae": 51.196063845129736,
+      "rmse": 68.75255281487017,
+      "top_decile_mae": 126.73845135081898
+    }
+  },
+  "beats_persistence": true,
+  "improvement_pct": 3.422018138303806
+}

@@ -48,3 +48,13 @@ data/raw/station_hour.csv/
 data/raw/*hour.csv
 data/raw/*.zip
 *.npy
+
+# Training sequences: derived from data/store, regenerate with
+# scripts/prepare_cpcb_data.py rather than committing 5 MB of arrays.
+data/train/
+
+# Local virtualenv
+.venv/
+
+# Live API sweep cache
+data/cache/

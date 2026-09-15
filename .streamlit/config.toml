@@ -1,0 +1,15 @@
+# Native theme. Widget internals (selects, sliders, popovers) are themed here
+# rather than with injected CSS, which Streamlit's own stylesheet overrides.
+[theme]
+base = "dark"
+primaryColor = "#38BDF8"
+backgroundColor = "#0B1120"
+secondaryBackgroundColor = "#16213A"
+textColor = "#E2E8F0"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
