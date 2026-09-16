@@ -1,19 +1,14 @@
-"""Google sign-in and the record of who has signed in."""
+"""Email capture and the record of who has used this."""
 
 import datetime as dt
+import re
 
 import streamlit as st
 
-SHEET_HEADERS = ["email", "name", "first_seen", "last_seen", "visits"]
+SHEET_HEADERS = ["email", "first_seen", "last_seen", "visits"]
 WORKSHEET = "users"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-
-def auth_configured():
-    try:
-        return bool(st.secrets.get("auth", {}).get("client_id"))
-    except Exception:
-        return False
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def sheet_configured():
@@ -25,20 +20,12 @@ def sheet_configured():
 
 
 def current_user():
-    if not auth_configured() or not st.user.get("is_logged_in"):
-        return None
-    return {"email": st.user.get("email"),
-            "name": st.user.get("name") or st.user.get("email"),
-            "picture": st.user.get("picture")}
+    email = st.session_state.get("user_email")
+    return {"email": email} if email else None
 
 
 def require_login():
     """Gate the page. Returns the signed-in user or stops the script."""
-    if not auth_configured():
-        st.error("Sign-in is not configured on this deployment. "
-                 "An `[auth]` section is missing from Streamlit secrets.")
-        st.stop()
-
     user = current_user()
     if user is None:
         _login_screen()
@@ -53,14 +40,20 @@ def _login_screen():
     st.markdown(
         '<div class="note">Live air quality from the CPCB / DPCC '
         'ground-monitoring network across Delhi, with a 24-hour PM2.5 '
-        'forecast. Sign in to continue.</div>', unsafe_allow_html=True)
+        'forecast. Enter your email to continue.</div>', unsafe_allow_html=True)
     st.markdown("")
-    if st.button("Sign in with Google", type="primary"):
-        st.login()
-    st.caption("Your name and email address are recorded so the number of "
-               "people using this can be counted. Nothing else is stored, "
-               "and it is never shared or sold. Google handles the password; "
-               "this app never sees it.")
+    email = st.text_input("Email address", placeholder="you@example.com")
+    if st.button("Continue", type="primary"):
+        clean = email.strip()
+        if not EMAIL_RE.match(clean):
+            st.error("That doesn't look like a valid email address.")
+        else:
+            st.session_state["user_email"] = clean
+            st.rerun()
+    st.caption("Your email address is recorded so the number of people "
+               "using this can be counted. Nothing else is asked for, and "
+               "it is never shared or sold. This is not verified against "
+               "anything -- it is a count, not an account.")
 
 
 def _record_once(user):
@@ -88,7 +81,7 @@ def _worksheet():
         sheet = book.add_worksheet(WORKSHEET, rows=1000, cols=len(SHEET_HEADERS))
         sheet.append_row(SHEET_HEADERS)
     if sheet.row_values(1) != SHEET_HEADERS:
-        sheet.insert_row(SHEET_HEADERS, 1)
+        sheet.update("A1", [SHEET_HEADERS])
     return sheet
 
 
@@ -97,15 +90,16 @@ def _upsert(user):
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     cell = sheet.find(user["email"], in_column=1)
     if cell is None:
-        sheet.append_row([user["email"], user["name"], now, now, 1])
+        sheet.append_row([user["email"], now, now, 1])
         return
     row = sheet.row_values(cell.row)
-    visits = int(row[4]) + 1 if len(row) > 4 and str(row[4]).isdigit() else 1
-    sheet.update(f"D{cell.row}:E{cell.row}", [[now, visits]])
+    visits = int(row[3]) + 1 if len(row) > 3 and str(row[3]).isdigit() else 1
+    sheet.update(f"C{cell.row}:D{cell.row}", [[now, visits]])
 
 
 def sidebar_account(user):
     st.markdown("---")
-    st.caption(f"Signed in as **{user['name']}**")
+    st.caption(f"Using as **{user['email']}**")
     if st.button("Sign out", width="stretch"):
-        st.logout()
+        del st.session_state["user_email"]
+        st.rerun()
