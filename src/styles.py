@@ -67,9 +67,24 @@ h1, h2, h3, h4 {{ color: {TEXT}; font-weight: 700; letter-spacing: -0.02em; }}
     -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 8px 28px rgba(2,6,23,0.42);
     transition: transform .18s ease, border-color .18s ease;
-    height: 100%;
+    flex: 1;
+    width: 100%;
+    box-sizing: border-box;
 }}
 .glass:hover {{ transform: translateY(-2px); border-color: rgba(148,163,184,0.3); }}
+
+[data-testid="stHorizontalBlock"]:has(.glass) {{ align-items: stretch; }}
+[data-testid="stHorizontalBlock"]:has(.glass) [data-testid="stColumn"] > div,
+[data-testid="stHorizontalBlock"]:has(.glass) [data-testid="stElementContainer"]:has(.glass),
+[data-testid="stHorizontalBlock"]:has(.glass) [data-testid="stMarkdown"]:has(.glass),
+[data-testid="stHorizontalBlock"]:has(.glass) [data-testid="stMarkdown"]:has(.glass) > div,
+[data-testid="stHorizontalBlock"]:has(.glass) [data-testid="stMarkdownContainer"]:has(.glass) {{
+    height: 100%;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+}}
 
 .eyebrow {{
     font-size: .68rem; font-weight: 700; letter-spacing: .13em;
