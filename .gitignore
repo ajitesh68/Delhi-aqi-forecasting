@@ -61,3 +61,7 @@ data/cache/
 
 # Claude Code local tool permissions (machine-specific)
 .claude/settings.local.json
+
+.streamlit/secrets.toml
+*.secrets.toml
+service_account*.json

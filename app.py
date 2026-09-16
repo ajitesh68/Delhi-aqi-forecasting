@@ -6,12 +6,15 @@ import streamlit as st
 st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
                    layout="wide", initial_sidebar_state="expanded")
 
-from src import analysis, data_loader, maps, metrics, styles, visualizations as viz
+from src import (analysis, auth, data_loader, maps, metrics, styles,
+                 visualizations as viz)
 from src.aqi import health_advisory
 from src.config import AQI_COLORS, NCR_CITIES
 from src.metrics import SENSITIVITY
 
 styles.inject(st)
+
+user = auth.require_login()
 
 
 def card(body):
@@ -57,6 +60,8 @@ with st.sidebar:
                             format_func=short) if station_names else None
 
     group = st.selectbox("Who is this for?", list(SENSITIVITY.keys()))
+
+    auth.sidebar_account(user)
 
     st.markdown("---")
     st.markdown("**Data sources**")
