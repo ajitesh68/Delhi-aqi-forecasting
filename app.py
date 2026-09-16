@@ -48,7 +48,8 @@ with st.sidebar:
                "network, not a satellite model.")
 
     station_names = sorted(stations["station"].dropna().unique()) if len(stations) else []
-    reporting = set(stations.dropna(subset=["aqi"])["station"])
+    reporting = (set(stations.dropna(subset=["aqi"])["station"])
+                if "aqi" in stations.columns else set())
     default = next((i for i, s in enumerate(station_names)
                     if "Anand Vihar" in s and s in reporting),
                    next((i for i, s in enumerate(station_names) if s in reporting), 0))
