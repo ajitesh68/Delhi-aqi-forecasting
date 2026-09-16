@@ -7,8 +7,8 @@ st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
                    layout="wide", initial_sidebar_state="expanded")
 
 from src import analysis, data_loader, maps, metrics, styles, visualizations as viz
-from src.aqi import get_category, health_advisory
-from src.config import AQI_COLORS, NCR_CITIES, POLLUTANT_LABELS
+from src.aqi import health_advisory
+from src.config import AQI_COLORS, NCR_CITIES
 from src.metrics import SENSITIVITY
 
 styles.inject(st)
@@ -26,7 +26,6 @@ def short(name):
     return str(name).split(",")[0].strip()
 
 
-# ----------------------------------------------------------------- load
 
 include_ncr = st.sidebar.toggle(
     "Include wider NCR", value=False,
@@ -42,7 +41,6 @@ with st.spinner(f"Reading live CPCB stations ({', '.join(cities[:2])}"
 status = data_loader.store_status()
 summary = data_loader.city_summary(stations)
 
-# ----------------------------------------------------------------- sidebar
 
 with st.sidebar:
     st.markdown("### Delhi Air")
@@ -50,7 +48,10 @@ with st.sidebar:
                "network, not a satellite model.")
 
     station_names = sorted(stations["station"].dropna().unique()) if len(stations) else []
-    default = next((i for i, s in enumerate(station_names) if "Anand Vihar" in s), 0)
+    reporting = set(stations.dropna(subset=["aqi"])["station"])
+    default = next((i for i, s in enumerate(station_names)
+                    if "Anand Vihar" in s and s in reporting),
+                   next((i for i, s in enumerate(station_names) if s in reporting), 0))
     selected = st.selectbox("Station", station_names, index=default,
                             format_func=short) if station_names else None
 
@@ -66,15 +67,14 @@ with st.sidebar:
     st.caption(
         f"Live: data.gov.in CPCB feed — {meta.get('total_stations', 0)} stations, "
         f"{meta.get('with_aqi', 0)} with a full AQI.\n\n"
-        f"History: OpenAQ CPCB archive — "
-        + (f"{status['rows']:,} hours across {status['stations']} stations."
-           if not status["empty"] else "still downloading.")
+        f"Charts: hours collected from that feed, "
+        + (f"{status['collected_rows']:,} so far."
+           if status.get("collected_rows") else "none yet.")
     )
     if meta.get("co_unit") == "unknown":
         st.caption("CO is excluded from AQI here: the feed reports it in units "
                    "that cannot be resolved, and guessing risks a 1000x error.")
 
-# ----------------------------------------------------------------- header
 
 left, right = st.columns([3, 2])
 with left:
@@ -106,11 +106,10 @@ if len(stations) == 0:
              "fall back on. The CPCB feed may be rate-limited — try again shortly.")
     st.stop()
 
-# ----------------------------------------------------------------- hero row
 
 row = stations[stations["station"] == selected].iloc[0] if selected else None
 
-c1, c2, c3 = st.columns([1.1, 1, 1])
+c1, c2, c3 = st.columns(3)
 
 with c1:
     if row is not None and pd.notna(row["aqi"]):
@@ -158,14 +157,12 @@ with c3:
 
 st.markdown("")
 
-# ----------------------------------------------------------------- tabs
 
 (tab_live, tab_when, tab_forecast, tab_history,
  tab_health, tab_about) = st.tabs(
     ["Live map", "When to go out", "Tomorrow", "History",
      "Your exposure", "How this works"])
 
-# --- live map -------------------------------------------------------
 
 with tab_live:
     view = st.radio("View", ["Stations", "Heatmap", "3D columns"],
@@ -212,7 +209,6 @@ with tab_live:
             title="Every reporting station, ranked"),
         use_container_width=True)
 
-# --- when to go out -------------------------------------------------
 
 with tab_when:
     st.markdown("### When should I go outside?")
@@ -277,43 +273,39 @@ with tab_when:
                         f'<div style="font-size:1.05rem;font-weight:800;color:{tone}">'
                         f'{s:g}</div></div>', unsafe_allow_html=True)
 
-# --- history --------------------------------------------------------
 
 with tab_history:
     st.markdown("### What the record shows")
-    st.markdown('<div class="note">Everything on this tab is computed from '
-                'observed CPCB station readings. The forecasting model plays '
-                'no part in any of these charts.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="note">Every chart here is computed from observed '
+                'CPCB station readings collected hour by hour. The forecasting '
+                'model plays no part in any of them.</div>',
+                unsafe_allow_html=True)
     st.markdown("")
 
     if status["empty"]:
-        st.info("The CPCB archive download is still running. Historical charts "
-                "appear as soon as the first station lands.")
+        st.info("No hours collected yet. These charts fill in as the hourly "
+                "collector runs.")
     else:
-        period = st.radio("Period", ["24 hours", "7 days", "30 days", "Patterns"],
+        period = st.radio("Period", ["24 hours", "7 days", "30 days"],
                           horizontal=True, label_visibility="collapsed")
+        days = {"24 hours": 1, "7 days": 7, "30 days": 30}[period]
 
-        # Trailing windows, not the whole store. The archive stops at its
-        # last backfill and never moves again, so a view of everything is
-        # dominated by a fixed past and looks frozen however long the
-        # collector runs. Anchored to now, each view follows the clock.
-        if period == "Patterns":
-            hist = data_loader.history(days=None)
-        else:
-            days = {"24 hours": 1, "7 days": 7, "30 days": 30}[period]
-            # One station, the one chosen in the sidebar. Forty-four lines
-            # over a single day is not a comparison, it is a thicket; the
-            # live map is where the spread between stations is read.
-            hist = data_loader.history(stations=[selected] if selected else None,
-                                       days=days + 1)
+        hist = data_loader.history(stations=[selected] if selected else None,
+                                   days=days + 1, collected_only=True)
+
+        span_h = 0
+        if len(hist):
+            span = hist["datetime"].max() - hist["datetime"].min()
+            span_h = span.total_seconds() / 3600
+        if span_h < days * 24:
+            st.info(f"Collection covers {span_h:.0f} hours so far, less than the "
+                    f"{days * 24} this view spans. The collector adds an hour "
+                    "every hour; the live feed publishes no history, so earlier "
+                    "hours cannot be fetched after the fact.", icon="⏳")
 
         if period == "24 hours":
             cutoff = pd.Timestamp.now().floor("h") - pd.Timedelta(hours=24)
             recent = hist[hist["datetime"] >= cutoff]
-            # Sub-indices of the hour itself, not the CPCB headline number.
-            # That number is a 24-hour rolling mean, which would flatten the
-            # intraday movement this view exists to show -- and cannot be
-            # formed at all until a full day of hours has accumulated.
             st.plotly_chart(
                 viz.timeseries_chart(recent, value="aqi_instant", by="station",
                                      title="Hourly AQI, last 24 hours",
@@ -329,8 +321,6 @@ with tab_history:
             span = 7 if period == "7 days" else 30
             daily = analysis.daily_summary(hist, by="station")
             daily = daily[~daily["sparse"]]
-            # A short outage is bridged and drawn dotted; anything wider than
-            # a few days stays absent rather than being invented.
             daily = analysis.fill_daily_gaps(daily, by="station", max_run=7)
             floor = pd.Timestamp.now().normalize() - pd.Timedelta(days=span)
             daily = daily[daily["date"] >= floor]
@@ -351,36 +341,6 @@ with tab_history:
                          "current hour, so they are interpolated, not measured.")
             st.caption(note)
 
-        else:
-            st.caption(f"{status['rows']:,} observed hours · "
-                       f"{status['stations']} stations · "
-                       f"{status['first']:%d %b %Y} to {status['last']:%d %b %Y}")
-            monthly = analysis.monthly_summary(hist, by=None)
-            st.plotly_chart(viz.monthly_chart(monthly), use_container_width=True)
-            yoy = analysis.year_over_year(hist)
-            st.plotly_chart(viz.year_over_year_chart(yoy), use_container_width=True)
-            if len(yoy) and yoy.attrs.get("doy_range"):
-                lo, hi = yoy.attrs["doy_range"]
-                st.caption(f"Restricted to days {lo}-{hi} of the year, the window "
-                           "both years actually cover, so a partial year is not "
-                           "compared against a full one.")
-
-            p1, p2 = st.columns(2)
-            with p1:
-                st.plotly_chart(viz.day_of_week_chart(analysis.day_of_week_effect(hist)),
-                                use_container_width=True)
-            with p2:
-                mix = analysis.pollutant_mix(hist, window_hours=24 * 30)
-                st.plotly_chart(
-                    viz.pollutant_radar(mix, title="What drives AQI here (30 days)"),
-                    use_container_width=True)
-
-            seasonal = analysis.seasonal_windows(hist)
-            if len(seasonal):
-                st.markdown("**Diwali windows, measured**")
-                st.dataframe(seasonal, use_container_width=True, hide_index=True)
-
-# --- exposure -------------------------------------------------------
 
 with tab_health:
     st.markdown("### Your day, not the city's")
@@ -433,9 +393,7 @@ with tab_health:
                 f'to a cleaner hour is the cheapest thing you can change.</div>',
                 unsafe_allow_html=True)
 
-# --- about ----------------------------------------------------------
 
-# --- tomorrow ------------------------------------------------------
 
 with tab_forecast:
     st.markdown("## The next 24 hours")
@@ -443,23 +401,23 @@ with tab_forecast:
     forecast = data_loader.forecast_24h(selected) if selected else None
 
     if forecast is not None:
-        # The forecast starts at the anchor, not at the newest row in the
-        # store. Live snapshots can land hours after the archive ends, and
-        # reporting those would claim a currency the forecast does not have.
         start = pd.Timestamp(forecast["anchor"])
         lag_hours = (pd.Timestamp.now() - start).total_seconds() / 3600
         if lag_hours > 6:
             st.warning(
                 f"This forecasts the 24 hours after **{start:%d %b, %H:%M}**, "
-                f"which is {lag_hours / 24:.0f} days ago — not the 24 hours after "
-                f"now. The model needs an unbroken week of readings behind its "
-                f"starting point, and the most recent stretch that qualifies "
-                f"ends there: the OpenAQ archive runs several days behind, and "
-                f"the live snapshots collected since are still too sparse to "
-                f"bridge the gap. Running `scripts/collect_snapshot.py` hourly "
-                f"closes it within a week, after which this becomes a genuine "
-                f"forecast.",
+                f"{lag_hours / 24:.0f} days ago — not the 24 hours after now. "
+                f"No later hour has enough readings behind it to start from.",
                 icon="🕐")
+        elif forecast["frac_observed"] < 0.6:
+            st.warning(
+                f"Built from **{forecast['frac_observed']:.0%} real readings**. "
+                f"The rest of the input week is carried forward from the last "
+                f"value seen, because collection started recently and the live "
+                f"feed cannot backfill. The model was trained on near-complete "
+                f"weeks, so treat this as indicative until the window fills — "
+                f"it improves every hour the collector runs.",
+                icon="⚠️")
 
     if forecast is None:
         st.info(
@@ -558,58 +516,38 @@ with tab_forecast:
             "during a severe episode.")
 
 with tab_about:
-    st.markdown("### How this works, and what it cannot do")
+    st.markdown("### How this works")
     a1, a2 = st.columns(2)
     with a1:
         st.markdown("""
 **Where the numbers come from**
 
-Live readings are the CPCB / DPCC ground-station feed published through
-data.gov.in — the same monitors that produce the official bulletin.
-Historical hours come from the OpenAQ archive of the same network.
+Every reading is from the CPCB / DPCC ground-monitoring network, served
+through data.gov.in — the same monitors behind the official bulletin.
+Weather comes from Open-Meteo; pollutants never do.
 
-Open-Meteo is still used, but only for weather. Its air-quality product
-is a coarse chemistry-transport model; measured against these stations at
-Anand Vihar it correlates **0.40** with hourly PM2.5 and is off by an
-average of 32 µg/m³. That is why pollutants are not taken from it.
+**How the AQI is worked out**
 
-**AQI is computed the way CPCB computes it**
-
-Sub-indices run on rolling averages — 24 hours for PM2.5, PM10, NO₂, SO₂
-and NH₃, 8 hours for CO and O₃ — not on instantaneous readings. A valid
-AQI needs at least three pollutants, one of which must be PM. When a
-station cannot meet that bar the AQI is shown as unavailable instead of
-being computed from whatever happens to be reporting.
+The CPCB index runs on rolling averages, not on the reading of the
+moment: 24 hours for PM2.5, PM10, NO₂, SO₂ and NH₃, 8 hours for CO and
+O₃. At least three pollutants must be available, one of them a PM. A
+station that cannot meet that shows no AQI rather than a number built
+from whatever happened to report.
         """)
     with a2:
         st.markdown("""
-**What is deliberately missing**
+**The forecast**
 
-CO is dropped from the AQI when its units cannot be resolved. CPCB
-publishes CO in mg/m³, OpenAQ relabels the same numbers as ppb, and the
-two feeds disagree by a factor that is neither 1 nor 1000. Guessing would
-risk a 1000x error, so an unresolvable reading is discarded.
+The next 24 hours of PM2.5 are predicted by a neural network reading the
+past week at that station together with the coming day's weather. Each
+forecast is scored against simply assuming tomorrow repeats today, and
+that comparison is shown with it — if the model is not beating it, you
+can see so.
 
-Stubble-fire counts are not a model input. The previous version generated
-them from a hardcoded seasonal curve whenever the satellite feed was
-unavailable, which is a duplicate of the month-of-year signal wearing a
-physics costume.
+**What it cannot do**
 
-**Honest limits**
-
-Coverage is uneven: stations drop pollutants for hours at a time, and
-periods built from thin data are marked rather than quietly averaged.
-The heatmap interpolates between monitors and is not a measurement.
+Stations go quiet for hours at a time, and a chart drawn from thin data
+says so rather than smoothing over it. Hours the network never recorded
+are drawn dotted and marked estimated. The map's colour wash between
+monitors is an interpolation, not a measurement.
         """)
-
-    if not status["empty"]:
-        st.markdown("---")
-        st.markdown("**Store contents**")
-        s1, s2, s3, s4 = st.columns(4)
-        s1.metric("Observed hours", f"{status['rows']:,}")
-        s2.metric("Stations", status["stations"])
-        s3.metric("Earliest", f"{status['first']:%b %Y}")
-        s4.metric("Archive lag", f"{status['lag_hours']:.0f} h")
-        st.caption("The archive runs a few days behind live because that is how "
-                   "quickly the upstream network republishes. Live values on the "
-                   "map are current; historical charts end where the archive does.")

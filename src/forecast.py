@@ -1,21 +1,4 @@
-"""Serving side of the 24-hour forecast.
-
-The model predicts PM2.5 in per-station scaled log space. Turning that
-back into something the dashboard can show takes three steps, and the
-middle one is easy to miss:
-
-1. inverse the per-station scaler
-2. correct for the log-space bias
-3. fold the forecast into the trailing 23 observed hours before computing
-   an AQI, because CPCB's index is a rolling average and a forecast hour
-   on its own is not one
-
-On (2): Huber loss in log space optimises something close to the
-conditional median, so expm1 of the mean prediction sits below the mean
-concentration. Uncorrected, the model reads low exactly during the
-episodes a warning exists for. The smearing factor estimated on training
-residuals puts that back.
-"""
+"""Serving side of the 24-hour forecast."""
 
 import json
 from pathlib import Path
@@ -31,9 +14,6 @@ WEATHER_FEATURES = ["temp_c", "humidity", "pressure_mb", "wind_kph",
 
 MODEL_DIR = Path(MODELS_DIR) / "cpcb"
 MODEL_PATH = MODEL_DIR / "pm25_24h.keras"
-# The scalers live beside the model, not in data/train, because serving
-# needs them and the training sequences they were derived from are a
-# regenerable 5 MB that has no business being deployed.
 META_PATH = MODEL_DIR / "meta.json"
 SCORECARD_PATH = MODEL_DIR / "scorecard.json"
 
@@ -102,11 +82,7 @@ def _scale_weather(frame, stats):
 
 
 def build_future(forecast_weather, hours, weather_stats):
-    """The forecast branch: weather over the hours being predicted.
-
-    This is the input persistence cannot have. Without it the model has
-    nothing to say that the last 24 hours do not already say.
-    """
+    """The forecast branch: weather over the hours being predicted."""
     frame = pd.DataFrame({"datetime": hours})
     if forecast_weather is not None and len(forecast_weather):
         frame = frame.merge(_wind_components(forecast_weather),
@@ -119,24 +95,13 @@ def build_future(forecast_weather, hours, weather_stats):
     return np.hstack([scaled, times]).astype(np.float32)
 
 
-MIN_WINDOW_COVERAGE = 0.5
-MIN_BASELINE_COVERAGE = 0.8
+MIN_WINDOW_COVERAGE = 0.25
+MIN_BASELINE_COVERAGE = 0.15
 
 
 def choose_anchor(history, min_coverage=MIN_WINDOW_COVERAGE,
                   min_baseline=MIN_BASELINE_COVERAGE):
-    """Latest hour with a usable window of history behind it.
-
-    The store mixes a lagging archive with live hourly snapshots, so the
-    newest row is often an island several days after the archive ends. A
-    window anchored there is nearly all holes.
-
-    The final 24 hours carry more weight than the rest: the model predicts
-    a departure from their mean, so an anchor whose last day is missing
-    produces a baseline built from nothing at all, and the forecast
-    collapses regardless of how complete the earlier week is. Both spans
-    are therefore checked separately.
-    """
+    """Latest hour with a usable window of history behind it."""
     d = history.sort_values("datetime").drop_duplicates("datetime")
     if len(d) == 0:
         return None
@@ -158,11 +123,7 @@ def choose_anchor(history, min_coverage=MIN_WINDOW_COVERAGE,
 
 
 def build_window(history, station, meta, weather_history=None, anchor=None):
-    """WINDOW_SIZE hours ending at `anchor`, plus a completeness score.
-
-    Returns (features, frac_observed, out_of_range_frac) or None when
-    there is not enough recent history to fill the window honestly.
-    """
+    """WINDOW_SIZE hours ending at `anchor`, plus a completeness score."""
     scalers = meta["scalers"].get(station)
     if scalers is None:
         return None
@@ -189,22 +150,12 @@ def build_window(history, station, meta, weather_history=None, anchor=None):
         if stats is None or pollutant not in frame.columns:
             columns.append(np.zeros(WINDOW_SIZE, dtype=np.float32))
             continue
-        # A missing hour is an absent reading, not clean air. Filling it
-        # with zero drags log1p to 0, which for PM2.5 lands five standard
-        # deviations below the station mean -- and since the baseline the
-        # model predicts a departure from is the mean of the last 24 input
-        # hours, one missing day is enough to collapse the whole forecast
-        # to nothing. Carry the nearest observed level instead, and let the
-        # is_observed channel tell the model the hour was imputed.
         series = (frame[pollutant].interpolate(limit=3, limit_area="inside")
                                   .ffill().bfill())
         raw = series.to_numpy(dtype=float)
         typical = np.expm1(stats["mean"])
         raw = np.clip(np.nan_to_num(raw, nan=typical), 0, None)
         z = (np.log1p(raw) - stats["mean"]) / stats["scale"]
-        # Unbounded on purpose: a 700 ug/m3 hour should land near z=3, not
-        # be clipped into the ordinary range. +/-6 sigma only catches
-        # corrupt data.
         out_of_range.append(np.abs(z) > 3.5)
         columns.append(np.clip(z, -6, 6).astype(np.float32))
 
@@ -222,10 +173,7 @@ def build_window(history, station, meta, weather_history=None, anchor=None):
 
 def predict(history, station, meta=None, smearing=1.0,
             weather_history=None, weather_forecast=None):
-    """24 hourly PM2.5 values in ug/m3, starting one hour after `history`.
-
-    Returns None when the window cannot be filled from observed data.
-    """
+    """24 hourly PM2.5 values in ug/m3, starting one hour after `history`."""
     meta = meta or load_meta()
     anchor = choose_anchor(history)
     if anchor is None:
@@ -250,8 +198,6 @@ def predict(history, station, meta=None, smearing=1.0,
          "station": np.array([[station_idx]], dtype=np.int32)},
         verbose=0)[0]
 
-    # The model predicts a departure from persistence, so the baseline it
-    # was trained against has to be added back before inverting.
     target_idx = meta["target_index"]
     baseline = float(features[-24:, target_idx].mean())
 
@@ -272,13 +218,7 @@ def predict(history, station, meta=None, smearing=1.0,
 
 
 def forecast_aqi(history, forecast_pm25, forecast_hours):
-    """AQI for each forecast hour, on proper CPCB rolling windows.
-
-    Each hour's index is computed from a 24-hour window made of the real
-    observed hours before it plus the forecast hours up to it. Applying
-    breakpoints to a single predicted hour would produce a number that is
-    not an AQI.
-    """
+    """AQI for each forecast hour, on proper CPCB rolling windows."""
     window = AVERAGING_HOURS.get("pm2_5", 24)
     recent = (history.sort_values("datetime")["pm2_5"]
                      .dropna().tail(window - 1).to_numpy(dtype=float))
@@ -286,8 +226,6 @@ def forecast_aqi(history, forecast_pm25, forecast_hours):
     rows = []
     for i, (hour, value) in enumerate(zip(forecast_hours, forecast_pm25)):
         mixed = np.concatenate([recent, forecast_pm25[:i + 1]])[-window:]
-        # Other pollutants are carried at their recent observed level:
-        # the model forecasts PM2.5, and PM2.5 drives the index here.
         result = calculate_aqi({"pm2_5": (float(mixed.mean()), len(mixed))},
                                require_three=False)
         rows.append({"datetime": hour, "pm2_5": float(value),
@@ -297,11 +235,7 @@ def forecast_aqi(history, forecast_pm25, forecast_hours):
 
 
 def persistence_baseline(history, hours=FORECAST_HOURS):
-    """What tomorrow looks like if it looks like today.
-
-    Shown next to the model so the comparison the scorecard makes is
-    visible in the UI too, not just in a JSON file.
-    """
+    """What tomorrow looks like if it looks like today."""
     recent = (history.sort_values("datetime")["pm2_5"]
                      .dropna().tail(24).to_numpy(dtype=float))
     if len(recent) == 0:
@@ -309,10 +243,6 @@ def persistence_baseline(history, hours=FORECAST_HOURS):
     return np.full(hours, float(recent.mean()))
 
 
-# Perturbations are applied to the weather the model actually reads, and
-# the model is re-run. That makes this a sensitivity analysis of the real
-# thing rather than a formula that mimics one -- if the model has not
-# learned that wind clears the air, this will honestly show no effect.
 SCENARIOS = {
     "As forecast": {},
     "Wind doubles": {"wind_kph": ("x", 2.0)},
@@ -343,8 +273,6 @@ def apply_scenario(weather_forecast, scenario):
             values = np.full_like(values, amount)
         out[column] = np.clip(values, 0, None)
 
-    # Wind speed drives the u/v components the model reads, so they have
-    # to be rescaled with it or the scenario changes nothing.
     if "wind_kph" in changes and "wind_dir" in out.columns:
         radians = np.deg2rad(out["wind_dir"].to_numpy(dtype=float))
         speed = out["wind_kph"].to_numpy(dtype=float)
@@ -355,11 +283,7 @@ def apply_scenario(weather_forecast, scenario):
 
 def scenario_sweep(history, station, weather_history, weather_forecast,
                    meta=None, scenarios=None):
-    """Run every scenario through the model and report the spread.
-
-    Returns a frame of scenario, mean and peak forecast PM2.5, and the
-    change against the unmodified forecast.
-    """
+    """Run every scenario through the model and report the spread."""
     meta = meta or load_meta()
     rows = []
     for name in (scenarios or SCENARIOS):
