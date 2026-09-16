@@ -1,29 +1,15 @@
-"""The app's only data entry point.
-
-Streamlit talks to this module and nothing else. It sits on top of three
-sources with very different characteristics:
-
-  data.gov.in   truly live, one snapshot per station, no history
-  OpenAQ        ~19 months of hourly history, several days behind
-  Open-Meteo    weather only, observed and forecast
-
-Reads come from the parquet store wherever possible so a page load never
-depends on an API being up or within quota.
-"""
+"""The app's only data entry point."""
 
 import pandas as pd
 import streamlit as st
 
 from src.aqi import add_rolling_aqi, calculate_aqi, get_category
-from src.config import (FORECAST_STATIONS, NCR_CITIES, OPENMETEO_ARCHIVE,
-                        OPENMETEO_FORECAST, POLLUTANTS)
+from src.config import (CPCB_STORE, FORECAST_STATIONS, NCR_CITIES,
+                        OPENMETEO_ARCHIVE, OPENMETEO_FORECAST, POLLUTANTS,
+                        RECENT_STORE)
 from src.sources import store
 from src.sources.cpcb_live import fetch_live
 
-# data.gov.in publishes min/max/avg per station-pollutant alongside the
-# reading time. CPCB computes the published AQI from a 24-hour average, and
-# `avg_value` is that aggregate, so it is used directly rather than being
-# treated as an instantaneous reading.
 AVG_IS_24H = True
 
 LIVE_TTL = 1800
@@ -32,15 +18,7 @@ HISTORY_TTL = 900
 
 @st.cache_data(ttl=LIVE_TTL, show_spinner=False)
 def live_stations(cities=("Delhi",)):
-    """Current AQI at every reporting station in `cities`.
-
-    Defaults to Delhi alone. The demo data.gov.in key returns 10 records
-    per call, so each extra city costs another few seconds of paging on a
-    cold cache; the wider NCR sweep is opt-in rather than the default.
-
-    Returns (frame, meta). One row per station with pollutant levels, the
-    CPCB AQI, its category and the dominant pollutant.
-    """
+    """Current AQI at every reporting station in `cities`."""
     df, meta = fetch_live(list(cities) if cities else NCR_CITIES)
     if len(df) == 0:
         return df, meta
@@ -71,25 +49,20 @@ def live_stations(cities=("Delhi",)):
 
 
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
-def history(stations=None, days=None, with_aqi=True):
-    """Observed hourly history from the parquet store.
-
-    This is the source for every historical chart in the app. Nothing here
-    is model output.
-    """
+def history(stations=None, days=None, with_aqi=True, collected_only=False):
+    """Observed hourly history from the parquet store."""
     start = None
     if days:
         start = pd.Timestamp.now().normalize() - pd.Timedelta(days=days)
+    path = RECENT_STORE if collected_only else CPCB_STORE
+    recent = None if collected_only else RECENT_STORE
 
-    # Station names differ between feeds -- the live data.gov.in sweep says
-    # "Anand Vihar, Delhi - DPCC" where the OpenAQ archive says
-    # "Anand Vihar, New Delhi - DPCC" -- so resolve by locality, not equality.
     if stations:
-        stored = store.load()
+        stored = store.load(path, recent=recent)
         available = stored["station"].dropna().unique()
         stations = [have for have in available
                     if any(_same(want, have) for want in stations)] or None
-    df = store.load(stations=stations, start=start)
+    df = store.load(path, stations=stations, start=start, recent=recent)
     if len(df) == 0 or not with_aqi:
         return df
     return add_rolling_aqi(df)
@@ -99,13 +72,15 @@ def history(stations=None, days=None, with_aqi=True):
 def store_status():
     """What the store currently holds, for honest UI labelling."""
     df = store.load()
+    collected = len(store.load(RECENT_STORE, recent=None))
     if len(df) == 0:
-        return {"empty": True, "rows": 0, "stations": 0, "first": None,
-                "last": None, "lag_hours": None}
+        return {"empty": True, "rows": 0, "collected_rows": 0, "stations": 0,
+                "first": None, "last": None, "lag_hours": None}
     last = df["datetime"].max()
     return {
         "empty": False,
         "rows": int(len(df)),
+        "collected_rows": int(collected),
         "stations": int(df["station"].nunique()),
         "first": df["datetime"].min(),
         "last": last,
@@ -116,12 +91,7 @@ def store_status():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def weather(lat, lon, days_back=14, forecast_hours=24):
-    """Observed and forecast weather from Open-Meteo.
-
-    Open-Meteo is kept for weather only. Its air-quality product is a
-    coarse chemistry-transport model that correlates just 0.40 with the
-    ground stations here, which is why pollutants come from CPCB instead.
-    """
+    """Observed and forecast weather from Open-Meteo."""
     import requests
 
     now = pd.Timestamp.now()
@@ -220,11 +190,7 @@ def _same(a, b):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def station_weather(station):
-    """Observed and forecast weather for one station.
-
-    The observed half fills the model's input window; the forecast half is
-    what the model uses to predict a change rather than a continuation.
-    """
+    """Observed and forecast weather for one station."""
     import os
 
     from src.config import STORE_DIR
@@ -249,13 +215,7 @@ def station_weather(station):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def forecast_24h(station):
-    """Next 24 hours for one station, with the persistence baseline beside it.
-
-    Returns None when no model is trained, the station was not in the
-    training set, or there is not enough recent history to fill the input
-    window honestly. Every one of those is a reason to show nothing rather
-    than something invented.
-    """
+    """Next 24 hours for one station, with the persistence baseline beside it."""
     from src import forecast as fc
 
     if not fc.available():

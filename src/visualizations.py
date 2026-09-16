@@ -1,15 +1,10 @@
-"""Plotly figures.
-
-Every chart here is built from observed CPCB readings unless its name
-says forecast.
-"""
+"""Plotly figures."""
 
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 
 from src.aqi import get_category
-from src.config import AQI_COLORS, POLLUTANT_LABELS
+from src.config import AQI_COLORS
 from src.styles import MUTED, SERIES, TEXT
 
 CATEGORY_BANDS = [
@@ -40,11 +35,7 @@ def _empty(message="Not enough data yet"):
 
 
 def diurnal_chart(profile, best_window=None, title="Average AQI by hour of day"):
-    """Hour-of-day profile with an inter-quartile ribbon.
-
-    The ribbon matters: an average of 180 made of steady 180s is a very
-    different day from one made of 60s and 300s.
-    """
+    """Hour-of-day profile with an inter-quartile ribbon."""
     if profile is None or len(profile) == 0:
         return _empty()
     d = profile.sort_values("hour")
@@ -77,40 +68,6 @@ def diurnal_chart(profile, best_window=None, title="Average AQI by hour of day")
     return fig
 
 
-def pollutant_radar(mix, title="Pollutant contribution"):
-    """Sub-index radar.
-
-    Plotting sub-indices rather than raw concentrations is the point: it
-    shows which pollutant is actually driving the AQI, which raw values
-    in different units cannot.
-    """
-    if mix is None or len(mix) == 0 or "sub_index" not in mix.columns:
-        return _empty()
-    d = mix.dropna(subset=["sub_index"])
-    if len(d) == 0:
-        return _empty("No sub-index data")
-    labels = [POLLUTANT_LABELS.get(p, p) for p in d["pollutant"]]
-    values = [float(x) for x in d["sub_index"]]
-    hover = [f"{POLLUTANT_LABELS.get(p, p)}<br>sub-index {s:.0f}<br>level {m:.1f}"
-             for p, s, m in zip(d["pollutant"], d["sub_index"], d["mean"])]
-
-    fig = go.Figure(go.Scatterpolar(
-        r=values + values[:1], theta=labels + labels[:1],
-        fill="toself", fillcolor="rgba(56,189,248,0.22)",
-        line=dict(color=SERIES[0], width=2),
-        hovertext=hover + hover[:1], hoverinfo="text"))
-    top = max(values) * 1.25 if values else 100
-    fig.update_layout(
-        title=title, height=330,
-        polar=dict(bgcolor="rgba(0,0,0,0)",
-                   radialaxis=dict(visible=True, range=[0, top],
-                                   gridcolor="rgba(148,163,184,0.16)",
-                                   tickfont=dict(color=MUTED, size=10)),
-                   angularaxis=dict(gridcolor="rgba(148,163,184,0.16)",
-                                    tickfont=dict(color=TEXT, size=12))))
-    return fig
-
-
 def station_ranking_chart(ranking, highlight=None, title="Stations right now"):
     if ranking is None or len(ranking) == 0:
         return _empty()
@@ -132,13 +89,7 @@ def station_ranking_chart(ranking, highlight=None, title="Stations right now"):
 
 
 def _estimated_split(g, value):
-    """Split a series into its observed part and its interpolated part.
-
-    The dashed trace keeps the observed points either side of each run so
-    the two meet instead of floating apart, and the solid trace drops the
-    interpolated ones so nothing invented is drawn in the colour that means
-    measured.
-    """
+    """Split a series into its observed part and its interpolated part."""
     est = g["estimated"].fillna(False).to_numpy(dtype=bool)
     bridge = est | np.r_[est[1:], False] | np.r_[False, est[:-1]]
     solid = g[value].where(~est)
@@ -189,62 +140,11 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
             x=d[xcol], y=y, mode="lines", name="AQI",
             line=dict(width=1.9, color=SERIES[0]), connectgaps=False,
             hovertemplate="%{x|%d %b %H:%M}<br>AQI %{y:.0f}<extra></extra>"))
-        # Below the plot: the default corner sits on top of the title, and
-        # the space above is already spoken for.
         fig.update_layout(showlegend=marked, legend=dict(
             orientation="h", yanchor="top", y=-0.16, xanchor="left", x=0))
 
     fig.update_layout(title=title, height=height, shapes=_band_shapes(ymax),
                       yaxis=dict(title="AQI", range=[0, ymax]), xaxis=dict(title=""),
-                      hovermode="x unified")
-    return fig
-
-
-def monthly_chart(monthly, title="Monthly average AQI"):
-    if monthly is None or len(monthly) == 0:
-        return _empty()
-    d = monthly.sort_values("month")
-    colors = [AQI_COLORS.get(get_category(v), MUTED) for v in d["mean"]]
-    sparse = d["sparse"] if "sparse" in d.columns else pd.Series(False, index=d.index)
-    ndays = d["n_days"] if "n_days" in d.columns else pd.Series(0, index=d.index)
-    fig = go.Figure(go.Bar(
-        x=d["month"], y=d["mean"], marker=dict(color=colors),
-        marker_pattern_shape=["/" if s else "" for s in sparse],
-        customdata=np.array(ndays).reshape(-1, 1),
-        hovertemplate="%{x|%b %Y}<br>mean AQI %{y:.0f}"
-                      "<br>%{customdata[0]:.0f} days of data<extra></extra>"))
-    fig.update_layout(title=title, height=300, yaxis=dict(title="AQI"),
-                      xaxis=dict(title=""), showlegend=False)
-    return fig
-
-
-def day_of_week_chart(dow, title="Weekday vs weekend"):
-    if dow is None or len(dow) == 0:
-        return _empty()
-    colors = [SERIES[2] if w else SERIES[0] for w in dow["is_weekend"]]
-    fig = go.Figure(go.Bar(
-        x=dow["day"], y=dow["mean"], marker=dict(color=colors),
-        hovertemplate="%{x}<br>mean AQI %{y:.0f}<extra></extra>"))
-    fig.update_layout(title=title, height=270, yaxis=dict(title="AQI"),
-                      xaxis=dict(title=""), showlegend=False)
-    return fig
-
-
-def year_over_year_chart(yoy, title="Year on year, same calendar window"):
-    if yoy is None or len(yoy) == 0:
-        return _empty("Needs two years of overlapping data")
-    fig = go.Figure()
-    for i, (year, g) in enumerate(yoy.groupby("year")):
-        g = g.sort_values("month")
-        fig.add_trace(go.Scatter(
-            x=g["month"], y=g["mean"], mode="lines+markers", name=str(year),
-            line=dict(width=2.4, color=SERIES[i % len(SERIES)]), marker=dict(size=7),
-            hovertemplate="%{y:.0f}<extra>" + str(year) + "</extra>"))
-    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    fig.update_layout(title=title, height=310, yaxis=dict(title="Mean AQI"),
-                      xaxis=dict(title="", tickmode="array",
-                                 tickvals=list(range(1, 13)), ticktext=months),
                       hovermode="x unified")
     return fig
 
