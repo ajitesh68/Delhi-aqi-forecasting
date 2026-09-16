@@ -9,12 +9,20 @@ tell the user which hours are real measurements and which were filled.
 When both sources cover the same hour, OpenAQ wins: it publishes a proper
 hourly aggregate, whereas data.gov.in gives a snapshot of whatever the
 station last reported.
+
+The store is split across two files. The archive holds the OpenAQ backfill
+and is written once; the recent file holds live snapshots and is trimmed to
+a rolling window. That split exists because the collector runs every hour
+and the archive is a megabyte: rewriting it hourly would add roughly 700 MB
+a month to git history, while the rolling file stays around 40 KB no matter
+how long it runs. Readers get the union and never need to know.
 """
 
 import os
 import pandas as pd
 
-from src.config import CPCB_STORE, POLLUTANTS, STORE_DIR
+from src.config import (CPCB_STORE, POLLUTANTS, RECENT_STORE,
+                        RECENT_WINDOW_DAYS, STORE_DIR)
 
 SOURCE_PRIORITY = {"openaq": 3, "datagov": 2, "interpolated": 1}
 
@@ -44,11 +52,25 @@ def _coerce(df):
     return df[COLUMNS]
 
 
-def load(path=CPCB_STORE, stations=None, start=None, end=None):
+def read_file(path):
+    """One parquet file, coerced to the store schema. Missing file is empty."""
     if not os.path.exists(path):
         return empty_frame()
-    df = pd.read_parquet(path)
-    df = _coerce(df)
+    return _coerce(pd.read_parquet(path))
+
+
+def load(path=CPCB_STORE, stations=None, start=None, end=None, recent=RECENT_STORE):
+    """The whole store: archive plus the rolling recent window.
+
+    Callers ask for hours, not files. Pass recent=None to read one file on
+    its own, which the collector needs so that appending does not drag the
+    archive through a merge on every run.
+    """
+    df = read_file(path)
+    if recent:
+        extra = read_file(recent)
+        if len(extra):
+            df = merge(df, extra)
     if stations is not None:
         df = df[df["station"].isin(list(stations))]
     if start is not None:
@@ -126,8 +148,36 @@ def canonical_names(incoming, existing):
 
 
 def append(incoming, path=CPCB_STORE):
-    existing = load(path)
+    """Merge rows into one store file. Used by the archive backfill."""
+    existing = load(path, recent=None)
     merged = merge(existing, canonical_names(incoming, existing))
+    save(merged, path)
+    return merged
+
+
+def append_recent(incoming, path=RECENT_STORE, archive=CPCB_STORE,
+                  days=RECENT_WINDOW_DAYS):
+    """Add an hour to the rolling file and drop whatever fell out of it.
+
+    Station names are resolved against the archive, not against the rolling
+    file: the archive carries the spellings the model was trained under, and
+    a snapshot filed under data.gov.in's variant would read as a different
+    station and never join up with its own history.
+
+    The window is measured back from the newest hour held rather than from
+    now, so a stalled feed ages the file out gradually instead of emptying
+    it during the outage.
+    """
+    existing = load(path, recent=None)
+    reference = load(archive, recent=None)
+    if len(reference) == 0:
+        reference = existing
+
+    merged = merge(existing, canonical_names(incoming, reference))
+    if len(merged) and days:
+        cutoff = merged["datetime"].max() - pd.Timedelta(days=days)
+        merged = merged[merged["datetime"] >= cutoff]
+
     save(merged, path)
     return merged
 

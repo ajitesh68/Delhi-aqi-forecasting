@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
-from src.config import NCR_CITIES
+from src.config import NCR_CITIES, RECENT_STORE
 from src.sources import store
 from src.sources.cpcb_live import fetch_live
 
@@ -40,10 +40,13 @@ def main():
         log("served from cache, not appending stale rows")
         return 1
 
-    before = store.load()
-    after = store.append(df)
+    before = store.load(RECENT_STORE, recent=None)
+    after = store.append_recent(df)
+    span = f"{after['datetime'].min():%d %b} to {after['datetime'].max():%d %b}" \
+        if len(after) else "empty"
     log(f"{meta['stations']} stations, {len(df)} station-hours at "
-        f"{meta['last_update']} -- store {len(before):,} -> {len(after):,} rows")
+        f"{meta['last_update']} -- rolling file {len(before):,} -> "
+        f"{len(after):,} rows ({span})")
     return 0
 
 

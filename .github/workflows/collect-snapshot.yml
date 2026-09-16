@@ -44,11 +44,14 @@ jobs:
           DATA_GOV_IN_API_KEY: ${{ secrets.DATA_GOV_IN_API_KEY }}
         run: python scripts/collect_snapshot.py --cities Delhi
 
-      - name: Commit the store if it changed
+      - name: Commit the rolling window if it changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/store/cpcb_hourly.parquet
+          # Only the rolling file is staged. The archive beside it is a
+          # megabyte and never changes here; committing it hourly would add
+          # hundreds of megabytes a month to the repository.
+          git add data/store/cpcb_recent.parquet
           # A stalled feed returns the hour already stored, which is a
           # no-op rather than a failure.
           if git diff --cached --quiet; then
@@ -56,4 +59,6 @@ jobs:
             exit 0
           fi
           git commit -m "data: CPCB snapshot $(date -u '+%Y-%m-%d %H:00 UTC')"
+          # Another run may have landed while this one was working.
+          git pull --rebase --autostash origin main
           git push

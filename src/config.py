@@ -10,8 +10,18 @@ STORE_DIR = os.path.join(DATA_DIR, "store")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 CACHE_DIR = os.path.join(DATA_DIR, "cache")
 
+# The archive is written once by the backfill and then left alone. Live
+# snapshots go to a separate rolling file, trimmed to the last
+# RECENT_WINDOW_DAYS, because the collector runs hourly and rewriting a
+# 1 MB parquet 24 times a day would add ~700 MB a month to git history.
+# Readers see the union of the two; only the small file ever churns.
 CPCB_STORE = os.path.join(STORE_DIR, "cpcb_hourly.parquet")
-SNAPSHOT_STORE = os.path.join(STORE_DIR, "cpcb_snapshots.parquet")
+RECENT_STORE = os.path.join(STORE_DIR, "cpcb_recent.parquet")
+# Twice the 168 hours the model reads. The margin absorbs a multi-day
+# collector or feed outage without losing the window; going wider only
+# grows a file that is rewritten every hour, and the archive already holds
+# anything older once OpenAQ catches up.
+RECENT_WINDOW_DAYS = 14
 STATION_REGISTRY = os.path.join(STORE_DIR, "stations.json")
 
 for _d in (DATA_DIR, RAW_DIR, PROCESSED_DIR, STORE_DIR, MODELS_DIR, CACHE_DIR):
