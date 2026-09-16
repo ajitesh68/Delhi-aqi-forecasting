@@ -131,6 +131,21 @@ def station_ranking_chart(ranking, highlight=None, title="Stations right now"):
     return fig
 
 
+def _estimated_split(g, value):
+    """Split a series into its observed part and its interpolated part.
+
+    The dashed trace keeps the observed points either side of each run so
+    the two meet instead of floating apart, and the solid trace drops the
+    interpolated ones so nothing invented is drawn in the colour that means
+    measured.
+    """
+    est = g["estimated"].fillna(False).to_numpy(dtype=bool)
+    bridge = est | np.r_[est[1:], False] | np.r_[False, est[:-1]]
+    solid = g[value].where(~est)
+    dashed = g[value].where(bridge)
+    return solid, dashed
+
+
 def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340):
     if df is None or len(df) == 0 or value not in df.columns:
         return _empty()
@@ -139,21 +154,45 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
         return _empty()
     xcol = "datetime" if "datetime" in d.columns else d.columns[0]
     ymax = float(d[value].max()) * 1.1
+    marked = "estimated" in d.columns and bool(d["estimated"].any())
 
     fig = go.Figure()
     if by and by in d.columns and d[by].nunique() > 1:
         for i, (name, g) in enumerate(d.groupby(by)):
+            g = g.sort_values(xcol)
             short = str(name).split(",")[0]
+            colour = SERIES[i % len(SERIES)]
+            y = g[value]
+            if marked:
+                y, dashed = _estimated_split(g, value)
+                fig.add_trace(go.Scatter(
+                    x=g[xcol], y=dashed, mode="lines", name=short,
+                    line=dict(width=1.4, color=colour, dash="dot"),
+                    opacity=0.55, showlegend=False, connectgaps=False,
+                    hovertemplate="%{y:.0f} estimated<extra>" + short + "</extra>"))
             fig.add_trace(go.Scatter(
-                x=g[xcol], y=g[value], mode="lines", name=short,
-                line=dict(width=1.7, color=SERIES[i % len(SERIES)]),
+                x=g[xcol], y=y, mode="lines", name=short,
+                line=dict(width=1.7, color=colour), connectgaps=False,
                 hovertemplate="%{y:.0f}<extra>" + short + "</extra>"))
     else:
+        d = d.sort_values(xcol)
+        y = d[value]
+        if marked:
+            y, dashed = _estimated_split(d, value)
+            fig.add_trace(go.Scatter(
+                x=d[xcol], y=dashed, mode="lines", name="Estimated",
+                line=dict(width=1.5, color=MUTED, dash="dot"),
+                connectgaps=False,
+                hovertemplate="%{x|%d %b}<br>AQI %{y:.0f}"
+                              "<br><i>estimated, no station data</i><extra></extra>"))
         fig.add_trace(go.Scatter(
-            x=d[xcol], y=d[value], mode="lines", name="AQI",
-            line=dict(width=1.9, color=SERIES[0]),
+            x=d[xcol], y=y, mode="lines", name="AQI",
+            line=dict(width=1.9, color=SERIES[0]), connectgaps=False,
             hovertemplate="%{x|%d %b %H:%M}<br>AQI %{y:.0f}<extra></extra>"))
-        fig.update_layout(showlegend=False)
+        # Below the plot: the default corner sits on top of the title, and
+        # the space above is already spoken for.
+        fig.update_layout(showlegend=marked, legend=dict(
+            orientation="h", yanchor="top", y=-0.16, xanchor="left", x=0))
 
     fig.update_layout(title=title, height=height, shapes=_band_shapes(ymax),
                       yaxis=dict(title="AQI", range=[0, ymax]), xaxis=dict(title=""),

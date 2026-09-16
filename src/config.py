@@ -17,11 +17,13 @@ CACHE_DIR = os.path.join(DATA_DIR, "cache")
 # Readers see the union of the two; only the small file ever churns.
 CPCB_STORE = os.path.join(STORE_DIR, "cpcb_hourly.parquet")
 RECENT_STORE = os.path.join(STORE_DIR, "cpcb_recent.parquet")
-# Twice the 168 hours the model reads. The margin absorbs a multi-day
-# collector or feed outage without losing the window; going wider only
-# grows a file that is rewritten every hour, and the archive already holds
-# anything older once OpenAQ catches up.
-RECENT_WINDOW_DAYS = 14
+# Sized by the trend views, not by the model: the 30-day view needs 30 days
+# of live hours once the archive falls more than a month behind, which it
+# permanently does -- the archive is frozen at its last backfill and only
+# this file moves forward. Ten days of margin absorb a multi-day collector
+# or feed outage. The 168 hours the model reads fit inside this comfortably.
+TREND_DAYS = {"day": 1, "week": 7, "month": 30}
+RECENT_WINDOW_DAYS = max(TREND_DAYS.values()) + 10
 STATION_REGISTRY = os.path.join(STORE_DIR, "stations.json")
 
 for _d in (DATA_DIR, RAW_DIR, PROCESSED_DIR, STORE_DIR, MODELS_DIR, CACHE_DIR):

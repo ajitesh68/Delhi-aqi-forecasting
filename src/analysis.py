@@ -86,6 +86,59 @@ def monthly_summary(df, value="aqi", by="station", min_days=MIN_DAYS_PER_MONTH):
     return out.sort_values(keys).reset_index(drop=True)
 
 
+def fill_daily_gaps(daily, by="station", max_run=None):
+    """Interpolate absent days, flagging every filled row as estimated.
+
+    A trailing view crosses any outage the collector had, and the live feed
+    has no history endpoint, so those hours can never be recovered -- the
+    hole is permanent. Dropping the days leaves a broken line; filling them
+    silently invents readings for a period that may have held a spike. So
+    they are interpolated and marked, and the caller draws them differently.
+
+    `max_run` refuses runs longer than that many days, which stay absent:
+    past some width an interpolation is a guess about a season, not a gap.
+    """
+    if len(daily) == 0 or "date" not in daily.columns:
+        return daily
+
+    d = daily.copy()
+    d["date"] = pd.to_datetime(d["date"])
+    d["estimated"] = False
+    groups = d.groupby(by) if by and by in d.columns else [(None, d)]
+
+    out = []
+    for name, grp in groups:
+        grp = grp.sort_values("date").set_index("date")
+        full = pd.date_range(grp.index.min(), grp.index.max(), freq="D")
+        grp = grp.reindex(full)
+        missing = grp["mean"].isna()
+
+        if max_run and missing.any():
+            # Number each consecutive run of absent days, then keep only the
+            # short ones: a fortnight of "interpolated" daily means would
+            # read as data while describing nothing that was measured.
+            runs = (missing != missing.shift()).cumsum()
+            too_wide = missing.groupby(runs).transform("sum") > max_run
+            missing = missing & ~too_wide
+
+        for col in ("mean", "max", "min"):
+            if col in grp.columns:
+                grp[col] = grp[col].interpolate(limit_area="inside")
+
+        grp["estimated"] = missing.fillna(False)
+        grp["n_observed"] = grp["n_observed"].fillna(0)
+        if by and name is not None:
+            grp[by] = name
+        if "sparse" in grp.columns:
+            grp["sparse"] = grp["sparse"].fillna(False).astype(bool)
+        out.append(grp.rename_axis("date").reset_index())
+
+    filled = pd.concat(out, ignore_index=True)
+    # Rows the interpolation could not reach (a too-wide run, or an edge)
+    # carry no value and are not shown at all.
+    return filled.dropna(subset=["mean"]).reset_index(drop=True)
+
+
 def day_of_week_effect(df, value="aqi_instant"):
     """Weekday vs weekend contrast, mostly a traffic signal.
 

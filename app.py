@@ -290,34 +290,71 @@ with tab_history:
         st.info("The CPCB archive download is still running. Historical charts "
                 "appear as soon as the first station lands.")
     else:
-        period = st.radio("Period", ["Daily", "Weekly", "Monthly", "Patterns"],
+        period = st.radio("Period", ["24 hours", "7 days", "30 days", "Patterns"],
                           horizontal=True, label_visibility="collapsed")
-        hist = data_loader.history(days=None)
 
-        st.caption(f"{status['rows']:,} observed hours · "
-                   f"{status['stations']} stations · "
-                   f"{status['first']:%d %b %Y} to {status['last']:%d %b %Y}")
+        # Trailing windows, not the whole store. The archive stops at its
+        # last backfill and never moves again, so a view of everything is
+        # dominated by a fixed past and looks frozen however long the
+        # collector runs. Anchored to now, each view follows the clock.
+        if period == "Patterns":
+            hist = data_loader.history(days=None)
+        else:
+            days = {"24 hours": 1, "7 days": 7, "30 days": 30}[period]
+            # One station, the one chosen in the sidebar. Forty-four lines
+            # over a single day is not a comparison, it is a thicket; the
+            # live map is where the spread between stations is read.
+            hist = data_loader.history(stations=[selected] if selected else None,
+                                       days=days + 1)
 
-        if period == "Daily":
+        if period == "24 hours":
+            cutoff = pd.Timestamp.now().floor("h") - pd.Timedelta(hours=24)
+            recent = hist[hist["datetime"] >= cutoff]
+            # Sub-indices of the hour itself, not the CPCB headline number.
+            # That number is a 24-hour rolling mean, which would flatten the
+            # intraday movement this view exists to show -- and cannot be
+            # formed at all until a full day of hours has accumulated.
+            st.plotly_chart(
+                viz.timeseries_chart(recent, value="aqi_instant", by="station",
+                                     title="Hourly AQI, last 24 hours",
+                                     height=400),
+                use_container_width=True)
+            n = int(recent["aqi_instant"].notna().sum()) if len(recent) else 0
+            st.caption(f"{n:,} observed station-hours since "
+                       f"{cutoff:%d %b %H:%M}. Plotted per hour rather than as "
+                       "the CPCB index, which averages the 24 hours behind it "
+                       "and so would hide the shape of the day.")
+
+        elif period in ("7 days", "30 days"):
+            span = 7 if period == "7 days" else 30
             daily = analysis.daily_summary(hist, by="station")
             daily = daily[~daily["sparse"]]
+            # A short outage is bridged and drawn dotted; anything wider than
+            # a few days stays absent rather than being invented.
+            daily = analysis.fill_daily_gaps(daily, by="station", max_run=7)
+            floor = pd.Timestamp.now().normalize() - pd.Timedelta(days=span)
+            daily = daily[daily["date"] >= floor]
+
             st.plotly_chart(
                 viz.timeseries_chart(
                     daily.rename(columns={"date": "datetime", "mean": "aqi"}),
-                    by="station", title="Daily mean AQI", height=400),
-                use_container_width=True)
-            st.caption("Days with fewer than 12 observed hours are excluded "
-                       "rather than averaged from thin data.")
-
-        elif period == "Weekly":
-            weekly = analysis.weekly_summary(hist, by="station")
-            st.plotly_chart(
-                viz.timeseries_chart(
-                    weekly.rename(columns={"week": "datetime", "mean": "aqi"}),
-                    by="station", title="Weekly mean AQI", height=400),
+                    by="station", title=f"Daily mean AQI, last {span} days",
+                    height=400),
                 use_container_width=True)
 
-        elif period == "Monthly":
+            n_est = int(daily["estimated"].sum()) if "estimated" in daily else 0
+            note = ("Days with fewer than 12 observed hours are excluded rather "
+                    "than averaged from thin data.")
+            if n_est:
+                note += (f" {n_est} station-days are dotted: the collector had "
+                         "no reading for them and the live feed serves only the "
+                         "current hour, so they are interpolated, not measured.")
+            st.caption(note)
+
+        else:
+            st.caption(f"{status['rows']:,} observed hours · "
+                       f"{status['stations']} stations · "
+                       f"{status['first']:%d %b %Y} to {status['last']:%d %b %Y}")
             monthly = analysis.monthly_summary(hist, by=None)
             st.plotly_chart(viz.monthly_chart(monthly), use_container_width=True)
             yoy = analysis.year_over_year(hist)
@@ -328,7 +365,6 @@ with tab_history:
                            "both years actually cover, so a partial year is not "
                            "compared against a full one.")
 
-        else:
             p1, p2 = st.columns(2)
             with p1:
                 st.plotly_chart(viz.day_of_week_chart(analysis.day_of_week_effect(hist)),
