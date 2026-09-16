@@ -1,85 +1,99 @@
-# 🌬️ Delhi Multivariate AQI Forecasting
+---
+title: Delhi Air
+emoji: 🌫️
+colorFrom: indigo
+colorTo: gray
+sdk: streamlit
+sdk_version: 1.63.0
+app_file: app.py
+pinned: false
+license: mit
+short_description: Live CPCB station AQI for Delhi, with a 24-hour PM2.5 forecast
+---
 
-A deep-learning-based air quality forecasting system for Delhi, using Multivariate LSTM networks trained on historical pollution and weather data to predict **72-hour AQI forecasts** across 6 monitoring stations.
+# Delhi Air
 
-## 🚀 Features
+Live air quality from the CPCB / DPCC ground-monitoring network across
+Delhi, with a 24-hour PM2.5 forecast that is measured against the baseline
+it has to beat rather than presented on trust.
 
-- **Multivariate LSTM Forecasting:** Uses 14 days (336 hours) of historical data — including pollutants (PM2.5, PM10, CO, NO2) and weather parameters (Temperature, Humidity, Pressure, Wind Speed) — to predict the next 72 hours of pollution levels.
-- **6 Delhi Locations:** Separate trained models for Anand Vihar, Connaught Place, Dwarka, IGI Airport, Okhla Phase III, and Rohini.
-- **Advanced Feature Engineering:** Cyclical time encoding (Sin/Cos for hour/month) and a custom `days_to_diwali` proximity feature to capture seasonal pollution spikes.
-- **Automated Data Pipeline:** Pulls real-time hourly data from the Open-Meteo API for live predictions.
-- **Official AQI Calculation:** Computes AQI using the official CPCB (Central Pollution Control Board) breakpoint formula.
-- **Modern UI:** Premium Streamlit application with 3-day forecasts, health advisories, and interactive charts.
+The headline number most dashboards show is a city average. Delhi does not
+have one air quality — on an ordinary afternoon the network reads 42 at
+Cantonment Area and 214 at Sonia Vihar. That spread is the most useful
+thing the data has to say, and this dashboard leads with it.
 
-## 📊 Model Architecture & Results
+## What the data actually is
 
-| Parameter | Value |
-|---|---|
-| **Architecture** | Sequential LSTM (64 → 32 units) + Dropout (0.2) + Dense |
-| **Input Shape** | `(336, 14)` — 14 days × 14 features |
-| **Output Shape** | `(288,)` — 72 hours × 4 pollutants |
-| **Optimizer** | Adam (LR: 0.001 with ReduceLROnPlateau) |
-| **Loss Function** | Mean Squared Error (MSE) |
-| **EarlyStopping** | Patience = 10 epochs |
-| **Final Validation Loss** | ~0.009 - 0.010 MSE |
-| **Final Validation MAE** | ~0.065 (~6% error) |
+| Layer | Source | Covers | Lag |
+|---|---|---|---|
+| Live | data.gov.in CAAQMS feed | 44 Delhi stations, 7 pollutants | ~1 hour |
+| History | OpenAQ CPCB archive | 7 stations, hourly, 19 months | ~5 days |
+| Weather | Open-Meteo | observed + 24 h forecast | live |
 
-## 🛠️ Technology Stack
+Nothing here is a satellite or chemistry-transport model. An earlier version
+of this project served Open-Meteo CAMS reanalysis while calling it CPCB
+data; measured at Anand Vihar the two correlate **0.401**, which is why the
+whole data layer was replaced.
 
-- **Data Engineering:** Pandas, NumPy
-- **Modeling:** TensorFlow / Keras (LSTM)
-- **Preprocessing:** Scikit-Learn (MinMaxScaler)
-- **Frontend:** Streamlit
-- **API:** Open-Meteo (Historical + Forecast weather data)
+Open-Meteo is still used, but only for weather — where it is genuinely good.
 
-## 📊 How to Run
+## AQI is computed the way CPCB defines it
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Start the Streamlit Application:
-   ```bash
-   streamlit run app.py
-   ```
-3. Open your browser and navigate to `http://localhost:8501`.
+Sub-indices use the mandated rolling windows — 24 hours for
+PM2.5/PM10/NO2/SO2/NH3, 8 hours for CO/O3 — and an AQI is published only
+when at least three sub-indices are available including a PM one. A
+pollutant whose "24-hour average" is built from too few hours is dropped
+rather than quietly averaged. `tests/test_aqi.py` pins this behaviour.
 
-To rebuild the processed data and retrain all six models:
+CO is excluded: the feed reports it in units that cannot be resolved from
+the values themselves, and guessing wrong is a 1000x error.
+
+## The forecast, and what it is worth
+
+A pooled Conv1D → LSTM reads 168 hours of history for one station plus the
+next 24 hours of forecast weather, and predicts PM2.5 for each of the next
+24 hours.
+
+Scored on January 2026, a month held out of training entirely:
+
+| | Model | Persistence |
+|---|---|---|
+| MAE | **49.4 µg/m³** | 51.2 µg/m³ |
+| Dirtiest 10% of hours | **107.3 µg/m³** | 126.7 µg/m³ |
+
+Persistence — "tomorrow looks like today" — is a strong baseline at this
+horizon, which is why it is the bar rather than a formality. The model
+clears it by 3.4% overall and by 15.3% on the hours that matter.
+
+Two design choices did that work. The model predicts a *departure from*
+persistence rather than a level, so it starts level with the baseline and
+can only add. And it reads forecast weather — wind, temperature, boundary
+layer height — which is the only thing it knows that persistence does not.
+
+One honest limitation: it is trained on a single Delhi winter, so it
+under-predicts the sharpest peaks.
+
+## Running it
 
 ```bash
-python src/prepare_lstm_data.py
-python src/lstm_model.py --force --epochs 100 --batch-size 64
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-The `--force` flag replaces existing model files. Training is faster on a Google Colab GPU than on a CPU laptop.
+The app reads the committed parquet store, so it works offline apart from
+the live feed. No API key is needed — data.gov.in's public demo key is the
+fallback. Set `DATA_GOV_IN_API_KEY` for a personal one.
 
-## 📁 Project Structure
+Rebuilding from scratch:
 
-```
-india-aqi-analysis/
-├── app.py                  # Main Streamlit web application
-├── src/
-│   ├── lstm_model.py       # LSTM training script
-│   ├── prepare_lstm_data.py # Data preparation & feature engineering
-│   └── aqi_formula.py       # CPCB AQI formula implementation
-├── scripts/
-│   └── download_2026_data.py # Open-Meteo API data ingestion
-├── models/
-│   ├── <location>_lstm.h5              # Trained LSTM model weights
-│   ├── <location>_feature_scaler.pkl   # Feature MinMaxScaler
-│   └── <location>_target_scaler.pkl    # Target MinMaxScaler
-├── data/                   # Raw CSV data
-├── requirements.txt
-└── README.md
+```bash
+python scripts/download_cpcb_history.py   # OpenAQ backfill -> archive
+python scripts/download_weather.py        # Open-Meteo per station
+python scripts/prepare_cpcb_data.py       # gap-aware windows -> sequences
+python scripts/train_cpcb.py              # pooled model + scorecard
 ```
 
-## 📈 How Prediction Works
-
-1. **Data Collection:** Last 14 days of hourly pollution + weather data is fetched via Open-Meteo API.
-2. **Preprocessing:** Data is scaled using saved MinMaxScaler (`.pkl` files).
-3. **Inference:** The scaled 14-day window is fed into the trained LSTM model (`.h5` file).
-4. **Post-processing:** Model output is inverse-scaled to get actual pollutant values (PM2.5, PM10, CO, NO2).
-5. **AQI Calculation:** Individual sub-indices are computed using CPCB breakpoints, and the maximum is taken as the final AQI.
-
----
-*Developed for advanced predictive analysis of Indian Air Quality.*
+`scripts/collect_snapshot.py` appends the current hour to the rolling store
+and runs hourly in CI. It is what closes the archive's lag: until the
+rolling window covers a continuous week, the forecast can only start where
+the archive ends, and the app says so rather than implying otherwise.
