@@ -58,3 +58,6 @@ data/train/
 
 # Live API sweep cache
 data/cache/
+
+# Claude Code local tool permissions (machine-specific)
+.claude/settings.local.json

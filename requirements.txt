@@ -11,6 +11,11 @@ pydeck>=0.9
 
 # Modelling. TensorFlow and scikit-learn are pinned to minors because
 # model and scaler artefacts do not load reliably across major versions.
-tensorflow>=2.19,<2.22
+#
+# Linux gets the CPU build: the deployed app has no GPU, and the default
+# wheel ships CUDA libraries that roughly double the install and push a
+# 1 GB container over its memory budget for no benefit.
+tensorflow-cpu>=2.19,<2.22; sys_platform == "linux"
+tensorflow>=2.19,<2.22; sys_platform != "linux"
 scikit-learn>=1.6,<2
 joblib>=1.3

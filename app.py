@@ -407,17 +407,22 @@ with tab_forecast:
     forecast = data_loader.forecast_24h(selected) if selected else None
 
     if forecast is not None:
-        last_seen = pd.Timestamp(forecast["last_observed"])
-        lag_hours = (pd.Timestamp.now() - last_seen).total_seconds() / 3600
+        # The forecast starts at the anchor, not at the newest row in the
+        # store. Live snapshots can land hours after the archive ends, and
+        # reporting those would claim a currency the forecast does not have.
+        start = pd.Timestamp(forecast["anchor"])
+        lag_hours = (pd.Timestamp.now() - start).total_seconds() / 3600
         if lag_hours > 6:
             st.warning(
-                f"This forecasts the 24 hours after **{last_seen:%d %b, %H:%M}**, "
+                f"This forecasts the 24 hours after **{start:%d %b, %H:%M}**, "
                 f"which is {lag_hours / 24:.0f} days ago — not the 24 hours after "
-                f"now. The OpenAQ archive runs several days behind, and the model "
-                f"needs a continuous week of readings to forecast from, so it can "
-                f"only start where the record ends. Running "
-                f"`scripts/collect_snapshot.py` hourly closes that gap within a "
-                f"week, after which this becomes a genuine forecast.",
+                f"now. The model needs an unbroken week of readings behind its "
+                f"starting point, and the most recent stretch that qualifies "
+                f"ends there: the OpenAQ archive runs several days behind, and "
+                f"the live snapshots collected since are still too sparse to "
+                f"bridge the gap. Running `scripts/collect_snapshot.py` hourly "
+                f"closes it within a week, after which this becomes a genuine "
+                f"forecast.",
                 icon="🕐")
 
     if forecast is None:

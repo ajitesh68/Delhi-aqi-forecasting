@@ -1,0 +1,59 @@
+# Hourly CPCB snapshot.
+#
+# The OpenAQ archive this project trains on runs several days behind, so
+# without this the forecast can only start where the archive ends and the
+# dashboard has to say "this forecasts five days ago". Each run appends the
+# current hour for every reporting station and commits the parquet back, so
+# the store grows a continuous window ending at the present hour.
+#
+# Only pandas and pyarrow are installed: the collector reads the data.gov.in
+# feed over urllib and writes parquet, and pulling TensorFlow in for that
+# would add several minutes to a job that runs 24 times a day.
+
+name: Collect CPCB snapshot
+
+on:
+  schedule:
+    # Ten past the hour: the CPCB feed publishes on the hour and GitHub's
+    # scheduler is only approximate, so this leaves room for both.
+    - cron: "10 * * * *"
+  workflow_dispatch:
+
+# A delayed run must never race a later one into the same parquet file.
+concurrency:
+  group: collect-snapshot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "pandas>=2.2" "pyarrow>=15"
+
+      - name: Append the current hour
+        env:
+          DATA_GOV_IN_API_KEY: ${{ secrets.DATA_GOV_IN_API_KEY }}
+        run: python scripts/collect_snapshot.py --cities Delhi
+
+      - name: Commit the store if it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/store/cpcb_hourly.parquet
+          # A stalled feed returns the hour already stored, which is a
+          # no-op rather than a failure.
+          if git diff --cached --quiet; then
+            echo "No new station-hours this run."
+            exit 0
+          fi
+          git commit -m "data: CPCB snapshot $(date -u '+%Y-%m-%d %H:00 UTC')"
+          git push

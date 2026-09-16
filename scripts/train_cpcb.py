@@ -204,6 +204,10 @@ def main():
           f"by {abs(gain):.1f}% MAE")
 
     model.save(out / "pm25_24h.keras")
+    # Serving needs the scalers, so they ship with the model rather than
+    # staying in the training directory.
+    with open(out / "meta.json", "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
     scorecard = {
         "trained_at": str(np.datetime64("now")),
         "epochs_run": len(history.history["loss"]),
