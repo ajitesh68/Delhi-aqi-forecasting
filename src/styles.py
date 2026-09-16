@@ -53,7 +53,11 @@ CSS = f"""
     font-family: {FONT};
     color: {TEXT};
 }}
-#MainMenu, footer, header {{ visibility: hidden; }}
+footer {{ visibility: hidden; }}
+[data-testid="stHeader"] {{ background: transparent; }}
+[data-testid="stHeader"] [data-testid="stToolbar"],
+[data-testid="stMainMenuButton"] {{ visibility: hidden; }}
+[data-testid="stExpandSidebarButton"] {{ visibility: visible !important; }}
 .block-container {{ padding-top: 2rem; padding-bottom: 3rem; max-width: 1400px; }}
 
 h1, h2, h3, h4 {{ color: {TEXT}; font-weight: 700; letter-spacing: -0.02em; }}
