@@ -12,9 +12,13 @@ pydeck>=0.9
 # Modelling. TensorFlow and scikit-learn are pinned to minors because
 # model and scaler artefacts do not load reliably across major versions.
 #
+# NEEDS PYTHON <= 3.13. TensorFlow publishes no wheels for 3.14, so a host
+# that defaults to it fails with "No matching distribution found" for every
+# version, which reads like a version-range problem and is not one. Set the
+# interpreter to 3.13 in the host's settings; there is nothing to fix here.
+#
 # Linux gets the CPU build: the deployed app has no GPU, and the default
-# wheel ships CUDA libraries that roughly double the install and push a
-# 1 GB container over its memory budget for no benefit.
+# wheel ships CUDA libraries that roughly double the install for no benefit.
 tensorflow-cpu>=2.19,<2.22; sys_platform == "linux"
 tensorflow>=2.19,<2.22; sys_platform != "linux"
 scikit-learn>=1.6,<2

@@ -75,6 +75,11 @@ under-predicts the sharpest peaks.
 
 ## Running it
 
+Python 3.11–3.13. **Not 3.14** — TensorFlow publishes no wheels for it
+yet, and the resulting `No matching distribution found for tensorflow-cpu`
+reads like a version-range problem rather than the interpreter it is. On a
+managed host, set the Python version to 3.13 before deploying.
+
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
