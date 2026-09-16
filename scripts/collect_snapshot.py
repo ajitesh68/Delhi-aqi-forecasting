@@ -12,6 +12,7 @@ the store has a continuous window ending at the present hour.
 import argparse
 import os
 import sys
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,7 +20,14 @@ import pandas as pd
 
 from src.config import NCR_CITIES, RECENT_STORE
 from src.sources import store
-from src.sources.cpcb_live import fetch_live
+from src.sources.cpcb_live import RateLimited, fetch_live
+
+# A missed hour costs almost nothing -- the next run is sixty minutes away
+# and the rolling window spans two weeks. A red cross every time the feed
+# rate-limits costs a great deal, because it trains you to ignore the
+# Actions tab and then a real break goes unnoticed. Transient failures are
+# therefore reported and skipped, not raised.
+TRANSIENT = (RateLimited, urllib.error.URLError, TimeoutError, OSError)
 
 
 def main():
@@ -32,13 +40,20 @@ def main():
         if not args.quiet:
             print(f"[{pd.Timestamp.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
-    df, meta = fetch_live(args.cities, use_cache_on_error=False)
+    try:
+        df, meta = fetch_live(args.cities, use_cache_on_error=False)
+    except TRANSIENT as exc:
+        # The demo key is shared globally and CI runners share addresses,
+        # so 429 is an ordinary outcome here rather than a fault.
+        log(f"skipped -- {type(exc).__name__}: {exc}")
+        return 0
+
     if len(df) == 0:
-        log("no records returned")
-        return 1
+        log("skipped -- feed returned no records")
+        return 0
     if meta.get("stale"):
-        log("served from cache, not appending stale rows")
-        return 1
+        log("skipped -- served from cache, refusing to append stale rows")
+        return 0
 
     before = store.load(RECENT_STORE, recent=None)
     after = store.append_recent(df)

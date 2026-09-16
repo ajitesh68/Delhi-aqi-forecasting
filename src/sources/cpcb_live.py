@@ -17,9 +17,10 @@ import urllib.request
 
 import pandas as pd
 
-from src.config import (CACHE_DIR, CO_MGM3_RANGE, CO_UGM3_RANGE, DATAGOV_PAGE_SIZE,
-                        DATAGOV_RESOURCE, DATAGOV_THROTTLE, DATAGOV_POLLUTANTS,
-                        NCR_CITIES, POLLUTANTS, datagov_key)
+from src.config import (CACHE_DIR, CO_MGM3_RANGE, CO_UGM3_RANGE,
+                        DATAGOV_DEMO_KEY, DATAGOV_PAGE_SIZE, DATAGOV_POLLUTANTS,
+                        DATAGOV_RESOURCE, DATAGOV_THROTTLE, NCR_CITIES,
+                        POLLUTANTS, datagov_key)
 
 ENDPOINT = f"https://api.data.gov.in/resource/{DATAGOV_RESOURCE}"
 CACHE_PATH = os.path.join(CACHE_DIR, "datagov_last_sweep.json")
@@ -32,7 +33,18 @@ class RateLimited(Exception):
     pass
 
 
-def _request(params, timeout=45, retries=2):
+MAX_BACKOFF = 30
+
+
+def _request(params, timeout=45, retries=3):
+    """One paged call, backing off on 429.
+
+    The public demo key is shared by every unauthenticated caller of this
+    dataset, so a 429 says more about everyone else's traffic than about
+    ours. When the server names a wait in Retry-After it is obeyed; that
+    figure is the only honest information available about when the window
+    reopens.
+    """
     url = ENDPOINT + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(retries + 1):
@@ -44,14 +56,31 @@ def _request(params, timeout=45, retries=2):
                 raise
             if attempt == retries:
                 raise RateLimited("data.gov.in rate limit reached") from exc
-            time.sleep(2 ** attempt * 3)
+            try:
+                wait = float(exc.headers.get("Retry-After") or 0)
+            except (TypeError, ValueError):
+                wait = 0
+            time.sleep(min(wait or 2 ** attempt * 3, MAX_BACKOFF))
     raise RateLimited("data.gov.in rate limit reached")
+
+
+def page_size():
+    """Records to ask for per call.
+
+    The public demo key caps every response at ten whatever is asked, so a
+    Delhi sweep costs about thirty calls and thirty chances to be rate
+    limited. A registered key is not capped, and asking for a hundred cuts
+    the same sweep to four calls. Asking for more than the server will give
+    is harmless -- paging stops on the reported total, not on a short page.
+    """
+    return DATAGOV_PAGE_SIZE if datagov_key() == DATAGOV_DEMO_KEY else 100
 
 
 def fetch_records(cities=None, max_pages=60):
     """Page through data.gov.in for the given cities. Returns raw records."""
     cities = list(cities or NCR_CITIES)
     key = datagov_key()
+    size = page_size()
     records, pages = [], 0
 
     for city in cities:
@@ -59,7 +88,7 @@ def fetch_records(cities=None, max_pages=60):
         while pages < max_pages:
             payload = _request({
                 "api-key": key, "format": "json",
-                "limit": DATAGOV_PAGE_SIZE, "offset": offset,
+                "limit": size, "offset": offset,
                 "filters[city]": city,
             })
             pages += 1
@@ -68,7 +97,11 @@ def fetch_records(cities=None, max_pages=60):
                 break
             records.extend(batch)
             offset += len(batch)
-            if len(batch) < DATAGOV_PAGE_SIZE or offset >= int(payload.get("total", 0)):
+            # Stop on the reported total rather than on a short page: the
+            # server may return fewer rows than asked for, and treating
+            # that as the end truncates the sweep to one page.
+            total = int(payload.get("total", 0) or 0)
+            if total and offset >= total:
                 break
             time.sleep(DATAGOV_THROTTLE)
     return records
