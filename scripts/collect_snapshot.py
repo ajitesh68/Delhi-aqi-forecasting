@@ -18,9 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
-from src.config import NCR_CITIES, RECENT_STORE
+from src.config import DATAGOV_DEMO_KEY, NCR_CITIES, RECENT_STORE, datagov_key
 from src.sources import store
-from src.sources.cpcb_live import RateLimited, fetch_live
+from src.sources.cpcb_live import RateLimited, fetch_live, page_size
 
 # A missed hour costs almost nothing -- the next run is sixty minutes away
 # and the rolling window spans two weeks. A red cross every time the feed
@@ -28,6 +28,11 @@ from src.sources.cpcb_live import RateLimited, fetch_live
 # Actions tab and then a real break goes unnoticed. Transient failures are
 # therefore reported and skipped, not raised.
 TRANSIENT = (RateLimited, urllib.error.URLError, TimeoutError, OSError)
+
+# These do not come right on their own. A rejected key returns 403 every
+# hour for ever, and swallowing it would leave the job green while nothing
+# is collected -- the exact silence the skip above exists to avoid.
+PERMANENT_STATUS = {401, 403, 404}
 
 
 def main():
@@ -40,8 +45,25 @@ def main():
         if not args.quiet:
             print(f"[{pd.Timestamp.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
+    # Which key is in play is otherwise invisible: the secret cannot be read
+    # back, and a missing one degrades quietly to the demo key rather than
+    # failing, so a sweep that is being rate limited for the shared-key
+    # reason looks exactly like one that is not.
+    registered = datagov_key() != DATAGOV_DEMO_KEY
+    log(f"{'registered' if registered else 'demo'} key, "
+        f"{page_size()} records per call")
+
     try:
         df, meta = fetch_live(args.cities, use_cache_on_error=False)
+    except urllib.error.HTTPError as exc:
+        # Caught ahead of the transient block below, which would otherwise
+        # swallow this: HTTPError subclasses URLError.
+        if exc.code in PERMANENT_STATUS:
+            log(f"FAILED -- HTTP {exc.code}: the key was rejected or the "
+                f"resource moved. Check DATA_GOV_IN_API_KEY.")
+            return 1
+        log(f"skipped -- HTTP {exc.code}")
+        return 0
     except TRANSIENT as exc:
         # The demo key is shared globally and CI runners share addresses,
         # so 429 is an ordinary outcome here rather than a fault.
