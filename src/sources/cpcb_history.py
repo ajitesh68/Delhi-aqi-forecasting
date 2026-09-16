@@ -1,19 +1,4 @@
-"""Historical hourly CPCB observations from OpenAQ v3.
-
-OpenAQ republishes CPCB/DPCC station data with roughly 19 months of
-hourly depth, which is what makes retraining on real ground-station
-readings possible. Two caveats drive the design:
-
-  * Ingestion lags several days and can stall outright, so this is a
-    history source only. Live values come from data.gov.in.
-  * The API rate-limits aggressively, so every call is throttled and
-    429s back off rather than failing the download.
-
-Declared units are not trustworthy: the same station exposes a CO sensor
-labelled 'ppb' whose values are plainly mg/m3. Units are therefore
-resolved from magnitude, and anything unresolvable is dropped instead of
-being converted on a guess.
-"""
+"""Historical hourly CPCB observations from OpenAQ v3."""
 
 import json
 import time
@@ -79,8 +64,6 @@ def discover_stations(bounds=None, min_last="2026-01-01", providers=("CPCB",)):
             canonical = OPENAQ_POLLUTANTS.get(name)
             if canonical is None:
                 continue
-            # A station can expose several sensors for one pollutant, most of
-            # them retired. Keep the highest id, which is the current one.
             prev = sensors.get(canonical)
             if prev is None or sensor["id"] > prev["id"]:
                 sensors[canonical] = {"id": sensor["id"],

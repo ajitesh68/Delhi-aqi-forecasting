@@ -1,25 +1,10 @@
-"""CPCB National Air Quality Index.
-
-Implements the CPCB method properly, which the previous `aqi_formula.py`
-did not: sub-indices are computed on **rolling averages**, not on
-instantaneous hourly readings.
-
-  24-hour average : PM2.5, PM10, NO2, SO2, NH3
-  8-hour rolling  : CO, O3
-
-A valid AQI needs at least three sub-indices, one of which must be PM2.5
-or PM10. AQI is the maximum sub-index; the pollutant achieving it is the
-dominant pollutant.
-"""
+"""CPCB National Air Quality Index."""
 
 import numpy as np
 import pandas as pd
 
 from src.config import AQI_CATEGORIES, POLLUTANT_LABELS
 
-# (concentration_low, concentration_high, index_low, index_high)
-# Bands are treated as continuous: the published tables print 30 then 31,
-# but a reading of 30.5 must still map somewhere.
 BREAKPOINTS = {
     "pm2_5": [(0, 30, 0, 50), (30, 60, 51, 100), (60, 90, 101, 200),
               (90, 120, 201, 300), (120, 250, 301, 400), (250, 500, 401, 500)],
@@ -47,11 +32,7 @@ MIN_SUBINDICES = 3
 
 
 def sub_index(pollutant, concentration):
-    """CPCB sub-index for one pollutant at an already-averaged concentration.
-
-    `concentration` must be the rolling average over AVERAGING_HOURS, in
-    ug/m3 (mg/m3 for CO). Returns None when the value is unusable.
-    """
+    """CPCB sub-index for one pollutant at an already-averaged concentration."""
     if pollutant not in BREAKPOINTS or concentration is None:
         return None
     try:
@@ -72,12 +53,7 @@ def sub_index(pollutant, concentration):
 
 
 def rolling_averages(df, now=None):
-    """Collapse an hourly frame into one CPCB-averaged value per pollutant.
-
-    `df` needs a `datetime` column plus any pollutant columns. Each
-    pollutant is averaged over its own trailing window ending at `now`.
-    Returns {pollutant: (value, n_hours_used)}.
-    """
+    """Collapse an hourly frame into one CPCB-averaged value per pollutant."""
     if df is None or len(df) == 0:
         return {}
     d = df.copy()
@@ -98,20 +74,7 @@ def rolling_averages(df, now=None):
 
 
 def calculate_aqi(averages, min_coverage=0.5, require_three=True):
-    """AQI from CPCB rolling averages.
-
-    `averages` maps pollutant -> value, or pollutant -> (value, n_hours).
-    When hour counts are supplied, a pollutant covering less than
-    `min_coverage` of its averaging window is dropped, since a "24-hour
-    average" built from two readings is not one.
-
-    `require_three` relaxes CPCB's three-sub-index rule. The only caller
-    that should set it False is the forecast, which predicts PM2.5 alone:
-    the result is then a PM2.5-only index and must be labelled as such,
-    never presented as the official figure.
-
-    Returns a dict: aqi, category, dominant, sub_indices, valid, reason.
-    """
+    """AQI from CPCB rolling averages."""
     subs, coverage = {}, {}
     for pollutant, entry in (averages or {}).items():
         if isinstance(entry, (tuple, list)):
@@ -182,17 +145,10 @@ def health_advisory(category):
 
 
 def sub_index_series(pollutant, values):
-    """Vectorised sub-index over an array of already-averaged concentrations.
-
-    Piecewise-linear interpolation across the breakpoint table, which is
-    exactly what `sub_index` does one value at a time. Used for whole-history
-    roll-ups where a Python loop would be far too slow.
-    """
+    """Vectorised sub-index over an array of already-averaged concentrations."""
     bands = BREAKPOINTS.get(pollutant)
     if bands is None:
         return pd.Series(np.nan, index=getattr(values, "index", None))
-    # Duplicate the band edges so the interpolation reproduces `sub_index`
-    # exactly, including the published tables' 50/51 step at each boundary.
     xs, ys = [], []
     for lo, hi, ilo, ihi in bands:
         xs.extend([lo, hi])
@@ -205,12 +161,7 @@ def sub_index_series(pollutant, values):
 
 
 def add_rolling_aqi(df, station_col="station", min_coverage=0.5):
-    """Attach CPCB rolling averages, per-pollutant sub-indices and AQI.
-
-    Operates per station on an hourly frame. Each pollutant is rolled over
-    its own CPCB window; a window with less than `min_coverage` of its
-    hours present yields NaN rather than a misleading average.
-    """
+    """Attach CPCB rolling averages, per-pollutant sub-indices and AQI."""
     if df is None or len(df) == 0:
         return df
     out = []
@@ -229,10 +180,6 @@ def add_rolling_aqi(df, station_col="station", min_coverage=0.5):
             full[f"{pollutant}_avg"] = avg
             subs[pollutant] = sub_index_series(pollutant, avg)
 
-        # Instantaneous sub-indices on the raw hourly readings. These are NOT
-        # the CPCB index, which is defined on rolling averages -- but a 24-hour
-        # rolling mean by construction flattens the diurnal cycle, so any
-        # "which hour is cleanest" question has to be asked of the raw values.
         raw = {}
         for pollutant in AVERAGING_HOURS:
             if pollutant in full.columns:

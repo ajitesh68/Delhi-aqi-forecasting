@@ -1,20 +1,4 @@
-"""Fetch hourly weather history for every station in the store.
-
-This is the piece that gives the model something persistence does not
-have. Predicting PM2.5 from past PM2.5 alone is a losing game against
-persistence at a 24-hour horizon -- both see the same information, and
-persistence has no variance to pay for.
-
-Delhi's severe episodes are dispersion events: the wind drops, a
-temperature inversion caps the boundary layer, and the same emissions
-sit in a shallower box. Wind speed and the temperature profile are what
-separate "tomorrow looks like today" from "tomorrow clears out". And at
-serving time the next 24 hours of weather are *forecast*, so the model
-gets genuinely forward-looking input.
-
-Open-Meteo's archive is free and needs no key. One call per station
-covers the whole period.
-"""
+"""Fetch hourly weather history for every station in the store."""
 
 import argparse
 import os
@@ -37,7 +21,7 @@ FIELDS = [
     "surface_pressure",
     "wind_speed_10m",
     "wind_direction_10m",
-    "boundary_layer_height",   # the ceiling pollution mixes under
+    "boundary_layer_height",
     "precipitation",
 ]
 

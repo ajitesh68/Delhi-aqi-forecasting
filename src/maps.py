@@ -1,9 +1,4 @@
-"""Pydeck maps over Delhi-NCR monitoring stations.
-
-The spatial view is the payoff of using real station data: a model grid
-gives every corner of the city the same number, whereas the ground
-network routinely shows a 150+ AQI spread across it.
-"""
+"""Pydeck maps over Delhi-NCR monitoring stations."""
 
 import pandas as pd
 import pydeck as pdk
@@ -44,7 +39,6 @@ def _prepare(stations):
     else:
         d["updated"] = ""
 
-    # Radius tracks severity so hotspots read before the colour does.
     d["radius"] = (aqi.fillna(60).clip(30, 500) * 1.7 + 420).astype(float)
     d["weight"] = aqi.fillna(0).clip(0, 500).astype(float)
     return d
@@ -72,11 +66,7 @@ def station_map(stations, zoom=9.6, height=520, style="dark"):
 
 
 def heatmap(stations, zoom=9.4, height=520, style="dark"):
-    """Interpolated AQI surface plus the station points that produced it.
-
-    The surface is a visual interpolation between monitors, not a
-    measurement; the points stay on top so the real data is never hidden.
-    """
+    """Interpolated AQI surface plus the station points that produced it."""
     d = _prepare(stations)
     d = d[d["aqi_value"].notna()]
     if len(d) == 0:
@@ -125,7 +115,6 @@ def column_map(stations, zoom=9.3, height=520, style="dark"):
 
 
 def _style(name):
-    # Carto basemaps need no token, unlike Mapbox styles.
     return {
         "dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
         "light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",

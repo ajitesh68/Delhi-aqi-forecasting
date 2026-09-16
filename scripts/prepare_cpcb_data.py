@@ -1,25 +1,4 @@
-"""Turn the CPCB store into training sequences.
-
-Three decisions here carry most of the weight, and each is a fix for a
-specific way the previous pipeline was wrong:
-
-1. **Log-space scaling, not MinMax.** MinMax anchors on the maximum, the
-   least stable statistic in this data. The old scaler was fitted where
-   PM2.5 topped out at 370; real CPCB reaches 710, so every severe winter
-   hour saturated at 1.0 and became indistinguishable from every other
-   severe hour. log1p then standardise leaves a 710 near z=3.
-
-2. **Scalers are fitted on the training period only**, so the winter
-   holdout stays genuinely unseen.
-
-3. **Sequences are cut from the continuous series, then assigned to a
-   split by target date.** Dropping the holdout rows first would splice
-   October onto February and manufacture windows that never happened.
-
-Windows are rejected rather than patched when the data underneath them is
-too thin -- a forecast trained on interpolation is a forecast of the
-interpolator.
-"""
+"""Turn the CPCB store into training sequences."""
 
 import argparse
 import json
@@ -38,10 +17,6 @@ from src.sources import store
 
 WEATHER_PATH = Path(STORE_DIR) / "weather_hourly.parquet"
 
-# Weather is what lets the model disagree with persistence. Both see the
-# same pollutant history; only the model gets told the wind is about to
-# pick up. Direction is decomposed into components because 359 and 1
-# degrees are neighbours.
 WEATHER_COLS = ["temp_c", "humidity", "pressure_mb", "wind_kph",
                 "blh_m", "precip_mm"]
 WEATHER_FEATURES = WEATHER_COLS + ["wind_u", "wind_v"]
@@ -49,26 +24,9 @@ WEATHER_FEATURES = WEATHER_COLS + ["wind_u", "wind_v"]
 STRIDE = 3
 TARGET = "pm2_5"
 
-# Ceilings for obvious sensor faults, not for real extremes. Delhi has
-# genuinely recorded PM10 near 1500, so these sit well above that.
 PHYSICAL_MAX = {"pm2_5": 1200.0, "pm10": 2500.0, "no2": 800.0,
                 "so2": 1000.0, "o3": 500.0, "co": 60.0, "nh3": 800.0}
 
-# The store holds exactly one severe season: Oct 2025 through Jan 2026.
-# Holding all of it out would leave a training set with no severe episode
-# in it at all, and then scoring the model on the only severe episode
-# there is -- a test the model cannot pass and which measures nothing
-# useful. So January is the holdout and Oct-Dec stay in training: the
-# model learns what a Delhi inversion does, and is scored on a stretch of
-# it that it has never seen.
-#
-# Split rule is a purged split on the targets. A window is test if its 24
-# target hours all fall in the holdout, and train if none of them do. A
-# test window's input history may reach back into December, because at
-# serving time you always have the previous seven days -- what must not
-# overlap is what the model was fitted against. Training windows sitting
-# after the holdout are dropped when their inputs reach back into it, so
-# nothing is fitted on a January hour.
 HOLDOUT_START = pd.Timestamp("2026-01-01")
 HOLDOUT_END = pd.Timestamp("2026-02-01")
 
@@ -90,9 +48,6 @@ FEATURE_NAMES = ([f"{p}_scaled" for p in POLLUTANTS]
                  + ["hour_sin", "hour_cos", "dow_sin", "dow_cos",
                     "doy_sin", "doy_cos", "is_observed"])
 
-# The forecast branch: what the weather will be doing over the target
-# hours. At serving time this comes from Open-Meteo's forecast, which is
-# information genuinely available ahead of the fact.
 FUTURE_FEATURE_NAMES = WEATHER_FEATURES + ["hour_sin", "hour_cos"]
 
 
@@ -142,14 +97,11 @@ def build_station_frame(df, weather=None):
     frame.index.name = "datetime"
 
     present = [p for p in POLLUTANTS if p in frame.columns]
-    # "Observed" means the hour carried a PM reading, which is what the
-    # target and the AQI both depend on.
     pm = [p for p in ("pm2_5", "pm10") if p in frame.columns]
     frame["is_observed"] = frame[pm].notna().any(axis=1) if pm else False
 
     for pollutant in present:
         ceiling = PHYSICAL_MAX.get(pollutant, 1000.0)
-        # OpenAQ emits -999 sentinels; log1p of a negative is NaN.
         frame[pollutant] = frame[pollutant].where(
             frame[pollutant].between(0, ceiling))
         frame[pollutant] = frame[pollutant].interpolate(
@@ -163,7 +115,6 @@ def build_station_frame(df, weather=None):
         frame = frame.merge(weather[columns], on="datetime", how="left")
         for column in WEATHER_FEATURES:
             if column in frame.columns:
-                # Reanalysis is gapless in practice; this covers the edges.
                 frame[column] = frame[column].interpolate(limit=6).ffill().bfill()
     return frame
 
@@ -208,8 +159,7 @@ def apply_scalers(frame, scalers, weather_stats=None):
 
 
 def future_block(frame, weather_stats):
-    """Weather over the target hours, plus hour-of-day so the model can
-    place a wind shift at 3am against one at 3pm."""
+    """Weather over the target hours, plus hour-of-day so the model can"""
     times = _time_features(pd.DatetimeIndex(frame["datetime"]))[:, :2]
     if not weather_stats:
         return times.astype(np.float32)
@@ -228,12 +178,9 @@ def cut_windows(features, future, frame, target_col_idx):
         w0, w1 = start, start + WINDOW_SIZE
         t0, t1 = w1, w1 + FORECAST_HOURS
 
-        # Every forecast hour must be a real measurement. A model scored
-        # against interpolation is scoring the interpolator.
         if not observed[t0:t1].all():
             continue
         if not usable[w0:w1].all():
-            # A hole the short-gap fill could not close.
             continue
         if filled[w0:w1].mean() > MAX_IMPUTED_FRAC:
             continue
@@ -347,7 +294,7 @@ def main():
 
     target_in = (tgt_start >= hstart) & (tgt_end < hend)
     target_out = (tgt_end < hstart) | (tgt_start >= hend)
-    inputs_clear = win_start >= hend          # only matters after the holdout
+    inputs_clear = win_start >= hend
 
     is_holdout = target_in
     is_train = target_out & ((tgt_end < hstart) | inputs_clear)
@@ -384,8 +331,6 @@ def main():
                    "embargoed": dropped},
         "per_station": report,
     }
-    # JSON, not pickle: sklearn pickles have already broken twice in this
-    # repo's history across version bumps.
     with open(out / "meta.json", "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
 

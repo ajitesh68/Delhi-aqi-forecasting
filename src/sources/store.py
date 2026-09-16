@@ -1,22 +1,4 @@
-"""Parquet store for CPCB hourly observations.
-
-One row per (station, hour). Every row carries provenance so the UI can
-tell the user which hours are real measurements and which were filled.
-
-  source        'openaq' | 'datagov' | 'interpolated'
-  is_observed   True only for rows that came from a monitoring station
-
-When both sources cover the same hour, OpenAQ wins: it publishes a proper
-hourly aggregate, whereas data.gov.in gives a snapshot of whatever the
-station last reported.
-
-The store is split across two files. The archive holds the OpenAQ backfill
-and is written once; the recent file holds live snapshots and is trimmed to
-a rolling window. That split exists because the collector runs every hour
-and the archive is a megabyte: rewriting it hourly would add roughly 700 MB
-a month to git history, while the rolling file stays around 40 KB no matter
-how long it runs. Readers get the union and never need to know.
-"""
+"""Parquet store for CPCB hourly observations."""
 
 import os
 import pandas as pd
@@ -60,12 +42,7 @@ def read_file(path):
 
 
 def load(path=CPCB_STORE, stations=None, start=None, end=None, recent=RECENT_STORE):
-    """The whole store: archive plus the rolling recent window.
-
-    Callers ask for hours, not files. Pass recent=None to read one file on
-    its own, which the collector needs so that appending does not drag the
-    archive through a merge on every run.
-    """
+    """The whole store: archive plus the rolling recent window."""
     df = read_file(path)
     if recent:
         extra = read_file(recent)
@@ -86,12 +63,7 @@ def save(df, path=CPCB_STORE):
 
 
 def merge(existing, incoming):
-    """Union two frames, keeping the higher-priority source per station-hour.
-
-    Rows are merged column-wise rather than replaced wholesale: a datagov
-    row carrying SO2 is not discarded just because an openaq row for the
-    same hour carries PM2.5.
-    """
+    """Union two frames, keeping the higher-priority source per station-hour."""
     existing, incoming = _coerce(existing), _coerce(incoming)
     if len(incoming) == 0:
         return existing
@@ -105,8 +77,6 @@ def merge(existing, incoming):
     combined = combined.sort_values(["station", "datetime", "_rank"])
 
     grouped = combined.groupby(["station", "datetime"], as_index=False, sort=False)
-    # last() per column takes the highest-ranked non-null value, so a lower
-    # priority source still contributes pollutants the winner is missing.
     out = grouped.agg({
         **{p: "last" for p in POLLUTANTS},
         "city": "last", "lat": "last", "lon": "last",
@@ -117,15 +87,7 @@ def merge(existing, incoming):
 
 
 def canonical_names(incoming, existing):
-    """Rename incoming stations to match ones already stored.
-
-    The two feeds spell the same monitor differently -- data.gov.in says
-    "Anand Vihar, Delhi - DPCC" where the OpenAQ archive says "Anand
-    Vihar, New Delhi - DPCC". Stored as written, they become two
-    unrelated stations: the live snapshots never close the archive's lag,
-    and the forecast never gets a continuous window. Matching on the
-    locality prefix keeps one monitor as one station.
-    """
+    """Rename incoming stations to match ones already stored."""
     if len(incoming) == 0 or len(existing) == 0:
         return incoming
 
@@ -157,17 +119,7 @@ def append(incoming, path=CPCB_STORE):
 
 def append_recent(incoming, path=RECENT_STORE, archive=CPCB_STORE,
                   days=RECENT_WINDOW_DAYS):
-    """Add an hour to the rolling file and drop whatever fell out of it.
-
-    Station names are resolved against the archive, not against the rolling
-    file: the archive carries the spellings the model was trained under, and
-    a snapshot filed under data.gov.in's variant would read as a different
-    station and never join up with its own history.
-
-    The window is measured back from the newest hour held rather than from
-    now, so a stalled feed ages the file out gradually instead of emptying
-    it during the outage.
-    """
+    """Add an hour to the rolling file and drop whatever fell out of it."""
     existing = load(path, recent=None)
     reference = load(archive, recent=None)
     if len(reference) == 0:
@@ -200,11 +152,7 @@ def coverage(df, pollutant="pm2_5"):
 
 
 def gap_lengths(df, pollutant="pm2_5"):
-    """Distribution of consecutive-missing-hour run lengths, per station.
-
-    Decides whether gaps are scattered singletons (safe to interpolate) or
-    clustered multi-day outages (which force windows to be rejected).
-    """
+    """Distribution of consecutive-missing-hour run lengths, per station."""
     runs = []
     for station, g in df.groupby("station"):
         g = g.sort_values("datetime").set_index("datetime")

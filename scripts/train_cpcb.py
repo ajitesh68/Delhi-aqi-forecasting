@@ -1,28 +1,4 @@
-"""Train the 24-hour PM2.5 forecaster on CPCB ground data.
-
-One pooled model with a station embedding, rather than one model per
-station. Ten stations of a single winter is really a few dozen
-independent pollution episodes; pooling lets every station's winter teach
-the same dispersion mapping, and the embedding carries what is local
-(Anand Vihar's traffic and dust, Dwarka's relative calm).
-
-A Conv1D front-end halves the sequence twice before the LSTM sees it, so
-a 168-hour window costs about what a 42-step one would. Huber loss
-because the target distribution has a long right tail and squared error
-would let a handful of severe hours dominate every gradient.
-
-The model predicts the *departure from persistence*, not the level. A
-first attempt that predicted the level outright lost to persistence by
-18% -- unsurprising, since persistence is a strong 24-hour baseline and
-the model was spending its capacity rediscovering it. Predicting the
-residual means an output of zero reproduces the baseline exactly, so the
-model starts level with it and can only add. The baseline is the mean of
-the last 24 input hours, computed from the window itself, so nothing
-leaks.
-
-The model is only worth shipping if it beats persistence on the winter
-holdout, so persistence is computed here and printed alongside.
-"""
+"""Train the 24-hour PM2.5 forecaster on CPCB ground data."""
 
 import argparse
 import json
@@ -42,15 +18,7 @@ from tensorflow.keras import layers
 
 
 def build_model(window, n_features, n_future, n_stations, embed_dim=6, horizon=24):
-    """Deliberately small: a few thousand training windows will not support
-    a quarter of a million parameters, and the first attempt at that size
-    overfitted hard (train MAE 0.29 against validation 0.44 and rising).
-
-    Two inputs carry the sequence. `sequence` is the past -- pollutants,
-    weather, time. `future` is the weather forecast over the hours being
-    predicted, and it is the only input that persistence cannot match: it
-    is how the model learns that tomorrow's wind clears today's air.
-    """
+    """Deliberately small: a few thousand training windows will not support"""
     sequence = keras.Input(shape=(window, n_features), name="sequence")
     future = keras.Input(shape=(horizon, n_future), name="future")
     station = keras.Input(shape=(1,), dtype="int32", name="station")
@@ -63,7 +31,6 @@ def build_model(window, n_features, n_future, n_stations, embed_dim=6, horizon=2
     x = layers.LSTM(64)(x)
     x = layers.Dropout(0.3)(x)
 
-    # The embedding is what makes pooling safe: shared dynamics, local level.
     e = layers.Embedding(n_stations, embed_dim)(station)
     e = layers.Flatten()(e)
 
@@ -76,7 +43,6 @@ def build_model(window, n_features, n_future, n_stations, embed_dim=6, horizon=2
     x = layers.Dense(64, activation="relu",
                      kernel_regularizer=keras.regularizers.l2(1e-4))(x)
     x = layers.Dropout(0.2)(x)
-    # Zero-initialised: at step one the model outputs the baseline exactly.
     out = layers.Dense(horizon, name="residual",
                        kernel_initializer="zeros", bias_initializer="zeros")(x)
 
@@ -105,11 +71,7 @@ def to_concentration(scaled, station_ids, meta):
 
 
 def persistence(X, meta):
-    """Baseline: tomorrow looks like the last 24 observed hours.
-
-    A strong baseline for 24-hour AQI, the bar the model has to clear, and
-    the anchor its residual is measured from.
-    """
+    """Baseline: tomorrow looks like the last 24 observed hours."""
     target_idx = meta["target_index"]
     last_day = X[:, -24:, target_idx]
     return np.repeat(last_day.mean(axis=1, keepdims=True), 24, axis=1)
@@ -118,8 +80,6 @@ def persistence(X, meta):
 def report(name, pred, truth):
     mae = np.abs(pred - truth).mean()
     rmse = np.sqrt(((pred - truth) ** 2).mean())
-    # Severe hours are the ones the dashboard exists for, so they get
-    # their own number rather than being averaged away.
     cut = np.percentile(truth, 90)
     top = truth >= cut
     top_mae = np.abs(pred[top] - truth[top]).mean() if top.any() else float("nan")
@@ -158,8 +118,6 @@ def main():
     print(f"window {X_tr.shape[1]}h x {X_tr.shape[2]} features   "
           f"{len(meta['stations'])} stations\n")
 
-    # The anchor the model predicts a departure from, taken from the input
-    # window itself so it is available identically at serving time.
     base_tr = persistence(X_tr, meta)
     base_te = persistence(X_te, meta)
 
@@ -177,9 +135,6 @@ def main():
                          y_te - base_te),
         epochs=args.epochs, batch_size=args.batch_size, shuffle=True, verbose=2,
         callbacks=[
-            # Patient: the residual output starts at zero, so validation
-            # loss looks respectable immediately and a tight patience stops
-            # the run before the model has learned anything to add.
             keras.callbacks.EarlyStopping(monitor="val_loss", patience=18,
                                           restore_best_weights=True),
             keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,
@@ -204,8 +159,6 @@ def main():
           f"by {abs(gain):.1f}% MAE")
 
     model.save(out / "pm25_24h.keras")
-    # Serving needs the scalers, so they ship with the model rather than
-    # staying in the training directory.
     with open(out / "meta.json", "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
     scorecard = {

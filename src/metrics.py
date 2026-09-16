@@ -1,23 +1,16 @@
-"""Health translations of air quality: dose, cigarettes, safety, timing.
-
-These turn an abstract index into something a person can act on. The
-cigarette conversion follows Berkeley Earth's equivalence of roughly
-22 ug/m3 of PM2.5 sustained for 24 hours to one cigarette smoked.
-"""
+"""Health translations of air quality: dose, cigarettes, safety, timing."""
 
 import numpy as np
 import pandas as pd
 
 from src.aqi import get_category
 
-PM25_PER_CIGARETTE = 22.0      # ug/m3 sustained over 24h
-WHO_DAILY_PM25 = 15.0          # WHO 2021 24-hour guideline
+PM25_PER_CIGARETTE = 22.0
+WHO_DAILY_PM25 = 15.0
 
-# Multipliers on the population-average risk. Above 1.0 means the group
-# feels a given AQI more sharply.
 SENSITIVITY = {
     "General adult": 1.00,
-    "Runner / cyclist": 1.85,   # elevated breathing rate multiplies intake
+    "Runner / cyclist": 1.85,
     "Child": 1.45,
     "Elderly": 1.40,
     "Asthma / COPD": 1.70,
@@ -48,17 +41,12 @@ def who_multiple(pm25):
 
 
 def activity_safety_score(aqi, group="General adult"):
-    """1-10 safety rating for outdoor activity. 10 is safe, 1 is not.
-
-    The AQI scale is mapped so the score falls through the CPCB category
-    boundaries, then adjusted for the group's sensitivity.
-    """
+    """1-10 safety rating for outdoor activity. 10 is safe, 1 is not."""
     if aqi is None or not np.isfinite(aqi):
         return None
     base = float(np.interp(aqi, [0, 50, 100, 200, 300, 400, 500],
                                 [10, 9.2, 7.8, 5.0, 2.8, 1.4, 1.0]))
     factor = SENSITIVITY.get(group, 1.0)
-    # Sensitivity erodes the margin above the floor, never the floor itself.
     score = 1.0 + (base - 1.0) / factor
     return round(float(np.clip(score, 1.0, 10.0)), 1)
 
@@ -73,10 +61,7 @@ def activity_verdict(score):
 
 
 def exposure_dose(segments):
-    """Total PM2.5 dose across a day described as (hours, pm25) segments.
-
-    Returns the time-weighted mean, total ug-hours, and cigarettes.
-    """
+    """Total PM2.5 dose across a day described as (hours, pm25) segments."""
     segments = [(float(h), float(p)) for h, p in segments
                 if h and p is not None and np.isfinite(p)]
     if not segments:
@@ -97,12 +82,7 @@ def exposure_dose(segments):
 
 def commute_exposure(home_pm25, work_pm25, commute_pm25, hours_home=14.0,
                      hours_work=8.0, hours_commute=2.0, indoor_factor=0.55):
-    """Daily dose for a home / commute / work routine.
-
-    Indoor air is not outdoor air: `indoor_factor` is the fraction of
-    outdoor PM2.5 that reaches inside a typical unfiltered Indian home or
-    office. Commuting is treated as fully outdoor.
-    """
+    """Daily dose for a home / commute / work routine."""
     segments = [
         (hours_home, (home_pm25 or 0) * indoor_factor),
         (hours_work, (work_pm25 or 0) * indoor_factor),
@@ -120,11 +100,7 @@ def commute_exposure(home_pm25, work_pm25, commute_pm25, hours_home=14.0,
 
 def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime",
                         earliest=None, latest=None):
-    """Cleanest contiguous `duration`-hour block in an hourly frame.
-
-    Returns the best window plus every candidate, so the UI can shade the
-    whole day rather than only naming a winner.
-    """
+    """Cleanest contiguous `duration`-hour block in an hourly frame."""
     if hourly is None or len(hourly) == 0 or aqi_col not in hourly.columns:
         return None
     df = hourly[[time_col, aqi_col]].dropna().copy()

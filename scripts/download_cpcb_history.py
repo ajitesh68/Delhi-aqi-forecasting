@@ -1,13 +1,4 @@
-"""Bulk-backfill CPCB hourly history from OpenAQ into the parquet store.
-
-Resumable: stations already covered in the store are skipped unless
---force is passed. Prints a gap report at the end, which decides the
-sequence-rejection thresholds used during training.
-
-  python scripts/download_cpcb_history.py --dry-run
-  python scripts/download_cpcb_history.py --from 2025-02-01
-  python scripts/download_cpcb_history.py --all
-"""
+"""Bulk-backfill CPCB hourly history from OpenAQ into the parquet store."""
 
 import argparse
 import os
@@ -24,11 +15,7 @@ from src.sources.cpcb_history import discover_stations, fetch_station_history
 
 
 def normalise(name):
-    """'Anand Vihar, New Delhi - DPCC' -> 'anand vihar'.
-
-    data.gov.in and OpenAQ spell the same station differently ('Delhi' vs
-    'New Delhi'), so match on the locality alone.
-    """
+    """'Anand Vihar, New Delhi - DPCC' -> 'anand vihar'."""
     if not name:
         return ""
     head = name.split(",")[0]

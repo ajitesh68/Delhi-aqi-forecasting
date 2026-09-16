@@ -1,12 +1,4 @@
-"""Real-time CPCB observations from data.gov.in.
-
-This is the *only* genuinely live source available without a registered
-key. The public demo key caps every response at 10 records regardless of
-the `limit` parameter, so the sweep pages with `offset` and throttles.
-
-On HTTP 429 the last successful sweep is served from disk rather than
-failing the page, and the caller is told the data is stale.
-"""
+"""Real-time CPCB observations from data.gov.in."""
 
 import json
 import os
@@ -37,14 +29,7 @@ MAX_BACKOFF = 30
 
 
 def _request(params, timeout=45, retries=3):
-    """One paged call, backing off on 429.
-
-    The public demo key is shared by every unauthenticated caller of this
-    dataset, so a 429 says more about everyone else's traffic than about
-    ours. When the server names a wait in Retry-After it is obeyed; that
-    figure is the only honest information available about when the window
-    reopens.
-    """
+    """One paged call, backing off on 429."""
     url = ENDPOINT + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(retries + 1):
@@ -65,14 +50,7 @@ def _request(params, timeout=45, retries=3):
 
 
 def page_size():
-    """Records to ask for per call.
-
-    The public demo key caps every response at ten whatever is asked, so a
-    Delhi sweep costs about thirty calls and thirty chances to be rate
-    limited. A registered key is not capped, and asking for a hundred cuts
-    the same sweep to four calls. Asking for more than the server will give
-    is harmless -- paging stops on the reported total, not on a short page.
-    """
+    """Records to ask for per call."""
     return DATAGOV_PAGE_SIZE if datagov_key() == DATAGOV_DEMO_KEY else 100
 
 
@@ -97,9 +75,6 @@ def fetch_records(cities=None, max_pages=60):
                 break
             records.extend(batch)
             offset += len(batch)
-            # Stop on the reported total rather than on a short page: the
-            # server may return fewer rows than asked for, and treating
-            # that as the end truncates the sweep to one page.
             total = int(payload.get("total", 0) or 0)
             if total and offset >= total:
                 break
@@ -118,14 +93,7 @@ def _to_float(value):
 
 
 def resolve_co_unit(series):
-    """Infer whether a CO series is mg/m3 or ug/m3 from its magnitude.
-
-    Neither source can be trusted to declare this correctly: CPCB publishes
-    mg/m3, OpenAQ relabels the same numbers 'ppb', and data.gov.in values
-    sit between the two plausible scales. Guessing wrong introduces a
-    1000x error, so an unresolvable series is reported as unknown and
-    excluded from AQI rather than silently converted.
-    """
+    """Infer whether a CO series is mg/m3 or ug/m3 from its magnitude."""
     vals = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
     if len(vals) == 0:
         return "unknown", None
@@ -166,9 +134,9 @@ def records_to_frame(records):
 
     unit, median = resolve_co_unit(df["co"])
     if unit == "ug/m3":
-        df["co"] = df["co"] / 1000.0          # normalise to mg/m3 for AQI
+        df["co"] = df["co"] / 1000.0
     elif unit == "unknown":
-        df["co"] = None                        # refuse to guess
+        df["co"] = None
     df.attrs["co_unit"] = unit
     df.attrs["co_median_raw"] = median
     return df.sort_values(["station", "datetime"]).reset_index(drop=True)
@@ -178,17 +146,7 @@ CACHE_MAX_AGE_MIN = 30
 
 
 def fetch_live(cities=None, use_cache_on_error=True, max_age_min=CACHE_MAX_AGE_MIN):
-    """Live CPCB sweep, disk cache first.
-
-    A full Delhi sweep is ~31 paged calls against a key that returns 10
-    records at a time, so it costs the better part of a minute. The feed
-    only updates hourly, so a recent cache is served straight from disk
-    and the network is left alone entirely.
-
-    Returns (frame, meta). `meta['from_cache']` marks a disk-served sweep;
-    `meta['stale']` means the network failed and the cache was the
-    fallback rather than the fast path.
-    """
+    """Live CPCB sweep, disk cache first."""
     meta = {"stale": False, "error": None, "fetched_at": pd.Timestamp.now(),
             "from_cache": False}
 
