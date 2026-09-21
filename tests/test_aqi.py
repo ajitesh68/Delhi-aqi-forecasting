@@ -73,6 +73,16 @@ class TestCalculateAqi:
         assert result["dominant"] == "pm2_5"
         assert result["aqi"] > 400
 
+    def test_cpcb_16_hour_minimum_for_24_hour_pollutants(self):
+        """CPCB's own rule: a 24-hourly sub-index needs >=16 hours, not 12."""
+        below = calculate_aqi({"pm2_5": (300, 15), "pm10": (100, 20),
+                               "no2": (40, 20), "o3": (50, 20)})
+        assert "pm2_5" not in below["sub_indices"]
+
+        at_minimum = calculate_aqi({"pm2_5": (300, 16), "pm10": (100, 20),
+                                    "no2": (40, 20), "o3": (50, 20)})
+        assert "pm2_5" in at_minimum["sub_indices"]
+
     def test_empty_input_is_invalid_not_zero(self):
         result = calculate_aqi({})
         assert not result["valid"]

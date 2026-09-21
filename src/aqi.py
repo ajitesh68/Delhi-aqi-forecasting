@@ -1,5 +1,7 @@
 """CPCB National Air Quality Index."""
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -29,6 +31,7 @@ AVERAGING_HOURS = {
 
 PM_POLLUTANTS = ("pm2_5", "pm10")
 MIN_SUBINDICES = 3
+MIN_COVERAGE = 16 / 24
 
 
 def sub_index(pollutant, concentration):
@@ -73,7 +76,7 @@ def rolling_averages(df, now=None):
     return out
 
 
-def calculate_aqi(averages, min_coverage=0.5, require_three=True):
+def calculate_aqi(averages, min_coverage=MIN_COVERAGE, require_three=True):
     """AQI from CPCB rolling averages."""
     subs, coverage = {}, {}
     for pollutant, entry in (averages or {}).items():
@@ -82,7 +85,7 @@ def calculate_aqi(averages, min_coverage=0.5, require_three=True):
         else:
             value, n_hours = entry, None
         if n_hours is not None:
-            need = AVERAGING_HOURS.get(pollutant, 24) * min_coverage
+            need = math.ceil(AVERAGING_HOURS.get(pollutant, 24) * min_coverage)
             if n_hours < need:
                 continue
             coverage[pollutant] = n_hours
@@ -118,7 +121,7 @@ def _invalid(reason, subs=None):
             "valid": False, "reason": reason}
 
 
-def aqi_from_hourly(df, now=None, min_coverage=0.5):
+def aqi_from_hourly(df, now=None, min_coverage=MIN_COVERAGE):
     """Convenience: hourly frame -> AQI result."""
     return calculate_aqi(rolling_averages(df, now=now), min_coverage=min_coverage)
 
@@ -160,7 +163,7 @@ def sub_index_series(pollutant, values):
     return out
 
 
-def add_rolling_aqi(df, station_col="station", min_coverage=0.5):
+def add_rolling_aqi(df, station_col="station", min_coverage=MIN_COVERAGE):
     """Attach CPCB rolling averages, per-pollutant sub-indices and AQI."""
     if df is None or len(df) == 0:
         return df
@@ -175,7 +178,7 @@ def add_rolling_aqi(df, station_col="station", min_coverage=0.5):
         for pollutant, hours in AVERAGING_HOURS.items():
             if pollutant not in full.columns:
                 continue
-            roll = full[pollutant].rolling(hours, min_periods=max(1, int(hours * min_coverage)))
+            roll = full[pollutant].rolling(hours, min_periods=max(1, math.ceil(hours * min_coverage)))
             avg = roll.mean()
             full[f"{pollutant}_avg"] = avg
             subs[pollutant] = sub_index_series(pollutant, avg)
