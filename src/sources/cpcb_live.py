@@ -163,15 +163,20 @@ def fetch_live(cities=None, use_cache_on_error=True, max_age_min=CACHE_MAX_AGE_M
         records = fetch_records(cities)
         if records:
             _write_cache(records)
+        elif use_cache_on_error:
+            records = _read_cache()
+            meta["stale"] = True
+            meta["error"] = "API returned no records"
     except (RateLimited, urllib.error.URLError, TimeoutError, OSError) as exc:
         if not use_cache_on_error:
             raise
         records = _read_cache()
         meta["stale"] = True
         meta["error"] = str(exc)
-        if not records:
-            meta.update({"co_unit": "unknown", "stations": 0, "last_update": None})
-            return pd.DataFrame(), meta
+        
+    if not records:
+        meta.update({"co_unit": "unknown", "stations": 0, "last_update": None})
+        return pd.DataFrame(), meta
 
     df = records_to_frame(records)
     meta["co_unit"] = df.attrs.get("co_unit", "unknown")
