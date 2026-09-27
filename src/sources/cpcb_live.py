@@ -1,4 +1,4 @@
-"""Real-time CPCB observations from data.gov.in."""
+"""Real-time CPCB observations from WAQI API."""
 
 import json
 import os
@@ -6,147 +6,147 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
 from src.config import (CACHE_DIR, CO_MGM3_RANGE, CO_UGM3_RANGE,
-                        DATAGOV_DEMO_KEY, DATAGOV_PAGE_SIZE, DATAGOV_POLLUTANTS,
-                        DATAGOV_RESOURCE, DATAGOV_THROTTLE, NCR_CITIES,
-                        POLLUTANTS, datagov_key)
+                        DELHI_BOUNDS, waqi_key)
 
-ENDPOINT = f"https://api.data.gov.in/resource/{DATAGOV_RESOURCE}"
-CACHE_PATH = os.path.join(CACHE_DIR, "datagov_last_sweep.json")
+CACHE_PATH = os.path.join(CACHE_DIR, "waqi_last_sweep.json")
 HEADERS = {"User-Agent": "delhi-aqi-dashboard/1.0", "Accept": "application/json"}
-
-MISSING = {"NA", "N/A", "", "-", "null", "None", None}
-
 
 class RateLimited(Exception):
     pass
 
-
-MAX_BACKOFF = 30
-
-
-def _request(params, timeout=45, retries=3):
-    """One paged call, backing off on 429."""
-    url = ENDPOINT + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers=HEADERS)
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.load(resp)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 429:
-                raise
-            if attempt == retries:
-                raise RateLimited("data.gov.in rate limit reached") from exc
-            try:
-                wait = float(exc.headers.get("Retry-After") or 0)
-            except (TypeError, ValueError):
-                wait = 0
-            time.sleep(min(wait or 2 ** attempt * 3, MAX_BACKOFF))
-    raise RateLimited("data.gov.in rate limit reached")
-
-
 def page_size():
-    """Records to ask for per call."""
-    return DATAGOV_PAGE_SIZE if datagov_key() == DATAGOV_DEMO_KEY else 100
+    return 100
 
+def _get_waqi(url):
+    req = urllib.request.Request(url, headers=HEADERS)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.load(resp)
+                if data.get("status") == "error" and "quota" in str(data.get("data", "")).lower():
+                    raise RateLimited("WAQI quota exceeded")
+                return data
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(1)
+    return {}
 
-def fetch_records(cities=None, max_pages=60):
-    """Page through data.gov.in for the given cities. Returns raw records."""
-    cities = list(cities or NCR_CITIES)
-    key = datagov_key()
-    size = page_size()
-    records, pages = [], 0
-
-    for city in cities:
-        offset = 0
-        while pages < max_pages:
-            payload = _request({
-                "api-key": key, "format": "json",
-                "limit": size, "offset": offset,
-                "filters[city]": city,
-            })
-            pages += 1
-            batch = payload.get("records", [])
-            if not batch:
-                break
-            records.extend(batch)
-            offset += len(batch)
-            total = int(payload.get("total", 0) or 0)
-            if total and offset >= total:
-                break
-            time.sleep(DATAGOV_THROTTLE)
+def fetch_records(cities=None, max_pages=None):
+    """Fetch all stations within Delhi bounds from WAQI."""
+    key = waqi_key()
+    if not key:
+        print("No WAQI API key provided.")
+        return []
+        
+    b = DELHI_BOUNDS
+    bounds_url = f"https://api.waqi.info/v2/map/bounds?latlng={b['lat_min']},{b['lon_min']},{b['lat_max']},{b['lon_max']}&networks=all&token={key}"
+    bounds_data = _get_waqi(bounds_url)
+    
+    if bounds_data.get("status") != "ok":
+        return []
+        
+    uids = [x["uid"] for x in bounds_data.get("data", [])]
+    
+    records = []
+    
+    def fetch_station(uid):
+        url = f"https://api.waqi.info/feed/@{uid}/?token={key}"
+        return _get_waqi(url)
+        
+    # Fetch all stations in parallel for speed
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_station, uid): uid for uid in uids}
+        for future in as_completed(futures):
+            res = future.result()
+            if res.get("status") == "ok":
+                records.append(res.get("data", {}))
+                
     return records
 
 
 def _to_float(value):
-    if value in MISSING:
-        return None
     try:
         v = float(value)
     except (TypeError, ValueError):
         return None
     return None if v < 0 else v
 
-
-def resolve_co_unit(series):
-    """Infer whether a CO series is mg/m3 or ug/m3 from its magnitude."""
-    vals = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
-    if len(vals) == 0:
-        return "unknown", None
-    median = float(vals.median())
-    if CO_MGM3_RANGE[0] <= median <= CO_MGM3_RANGE[1]:
-        return "mg/m3", median
-    if CO_UGM3_RANGE[0] <= median <= CO_UGM3_RANGE[1]:
-        return "ug/m3", median
-    return "unknown", median
-
-
 def records_to_frame(records):
-    """Pivot the long pollutant-per-row feed into one row per station-hour."""
-    rows = {}
+    """Convert WAQI feed records to DataFrame."""
+    rows = []
     for rec in records:
-        canonical = DATAGOV_POLLUTANTS.get(rec.get("pollutant_id"))
-        if canonical is None:
+        city_info = rec.get("city", {})
+        name = city_info.get("name", "Unknown")
+        
+        # All stations from bounds query are within Delhi NCR area
+        # Skip only non-standard entries (e.g. NASA calibration sensors)
+        if "NASA" in name or "Calib" in name:
             continue
-        station = rec.get("station")
-        stamp = pd.to_datetime(rec.get("last_update"), dayfirst=True, errors="coerce")
-        if station is None or pd.isna(stamp):
+            
+        iaqi = rec.get("iaqi", {})
+        time_info = rec.get("time", {})
+        
+        stamp = pd.to_datetime(time_info.get("iso"), errors="coerce")
+        if pd.isna(stamp):
             continue
+            
+        # Floor to hour as in original
         stamp = stamp.floor("h")
-        key = (station, stamp)
-        row = rows.setdefault(key, {
-            "datetime": stamp, "station": station, "city": rec.get("city"),
-            "lat": _to_float(rec.get("latitude")), "lon": _to_float(rec.get("longitude")),
-            "source": "datagov", "is_observed": True,
-        })
-        row[canonical] = _to_float(rec.get("avg_value"))
+        
+        geo = city_info.get("geo", [None, None])
+        lat, lon = None, None
+        if len(geo) == 2:
+            lat, lon = geo
+            
+        row = {
+            "datetime": stamp,
+            "station": name.split(",")[0].strip(),
+            "city": "Delhi",
+            "lat": _to_float(lat),
+            "lon": _to_float(lon),
+            "source": "waqi",
+            "is_observed": True,
+        }
+        
+        # Map WAQI pollutants to our canonical names
+        # WAQI keys: pm25, pm10, o3, no2, so2, co, nh3
+        mapping = {
+            "pm25": "pm2_5", "pm10": "pm10", "no2": "no2",
+            "so2": "so2", "o3": "o3", "co": "co", "nh3": "nh3"
+        }
+        
+        for waqi_key, canonical in mapping.items():
+            val = iaqi.get(waqi_key, {}).get("v")
+            row[canonical] = _to_float(val)
+            
+        rows.append(row)
 
-    df = pd.DataFrame(list(rows.values()))
+    df = pd.DataFrame(rows)
     if len(df) == 0:
         return df
+        
+    from src.config import POLLUTANTS
     for pollutant in POLLUTANTS:
         if pollutant not in df.columns:
             df[pollutant] = None
-
-    unit, median = resolve_co_unit(df["co"])
-    if unit == "ug/m3":
-        df["co"] = df["co"] / 1000.0
-    elif unit == "unknown":
-        df["co"] = None
-    df.attrs["co_unit"] = unit
-    df.attrs["co_median_raw"] = median
+            
+    df.attrs["co_unit"] = "mg/m3" # WAQI CO is usually in mg/m3
     return df.sort_values(["station", "datetime"]).reset_index(drop=True)
 
 
 CACHE_MAX_AGE_MIN = 30
 
-
 def fetch_live(cities=None, use_cache_on_error=True, max_age_min=CACHE_MAX_AGE_MIN):
-    """Live CPCB sweep, disk cache first."""
+    """Live sweep, disk cache first."""
     meta = {"stale": False, "error": None, "fetched_at": pd.Timestamp.now(),
             "from_cache": False}
 

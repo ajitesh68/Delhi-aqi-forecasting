@@ -125,3 +125,8 @@ def datagov_key():
 def openaq_key():
     load_env()
     return os.environ.get("OPENAQ_API_KEY", "")
+
+
+def waqi_key():
+    load_env()
+    return os.environ.get("WAQI_API_KEY", "")

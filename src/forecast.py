@@ -42,7 +42,22 @@ def load_model():
     global _model
     if _model is None:
         from tensorflow import keras
-        _model = keras.models.load_model(MODEL_PATH, compile=False)
+        # Patch: the saved model used a Keras version where GlorotUniform
+        # accepted input_axes/output_axes. Current Keras removed them.
+        import keras.src.initializers.random_initializers as _ri
+        _orig_init = _ri.GlorotUniform.__init__
+        def _patched_init(self, seed=None, **kwargs):
+            kwargs.pop("input_axes", None)
+            kwargs.pop("output_axes", None)
+            _orig_init(self, seed=seed, **kwargs)
+        _ri.GlorotUniform.__init__ = _patched_init
+        try:
+            _model = keras.models.load_model(MODEL_PATH, compile=False,
+                                             safe_mode=False)
+        except TypeError:
+            _model = keras.models.load_model(MODEL_PATH, compile=False)
+        finally:
+            _ri.GlorotUniform.__init__ = _orig_init
     return _model
 
 

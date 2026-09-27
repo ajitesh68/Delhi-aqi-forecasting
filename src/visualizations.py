@@ -117,13 +117,15 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
             if marked:
                 y, dashed = _estimated_split(g, value)
                 fig.add_trace(go.Scatter(
-                    x=g[xcol], y=dashed, mode="lines", name=short,
+                    x=g[xcol], y=dashed, mode="lines+markers", name=short,
                     line=dict(width=1.4, color=colour, dash="dot"),
+                    marker=dict(size=4),
                     opacity=0.55, showlegend=False, connectgaps=False,
                     hovertemplate="%{y:.0f} estimated<extra>" + short + "</extra>"))
             fig.add_trace(go.Scatter(
-                x=g[xcol], y=y, mode="lines", name=short,
-                line=dict(width=1.7, color=colour), connectgaps=False,
+                x=g[xcol], y=y, mode="lines+markers", name=short,
+                line=dict(width=1.7, color=colour), 
+                marker=dict(size=4), connectgaps=False,
                 hovertemplate="%{y:.0f}<extra>" + short + "</extra>"))
     else:
         d = d.sort_values(xcol)
@@ -131,14 +133,16 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
         if marked:
             y, dashed = _estimated_split(d, value)
             fig.add_trace(go.Scatter(
-                x=d[xcol], y=dashed, mode="lines", name="Estimated",
+                x=d[xcol], y=dashed, mode="lines+markers", name="Estimated",
                 line=dict(width=1.5, color=MUTED, dash="dot"),
+                marker=dict(size=4),
                 connectgaps=False,
                 hovertemplate="%{x|%d %b}<br>AQI %{y:.0f}"
                               "<br><i>estimated, no station data</i><extra></extra>"))
         fig.add_trace(go.Scatter(
-            x=d[xcol], y=y, mode="lines", name="AQI",
-            line=dict(width=1.9, color=SERIES[0]), connectgaps=False,
+            x=d[xcol], y=y, mode="lines+markers", name="AQI",
+            line=dict(width=1.9, color=SERIES[0]), 
+            marker=dict(size=4), connectgaps=False,
             hovertemplate="%{x|%d %b %H:%M}<br>AQI %{y:.0f}<extra></extra>"))
         fig.update_layout(showlegend=marked, legend=dict(
             orientation="h", yanchor="top", y=-0.16, xanchor="left", x=0))
