@@ -1,12 +1,9 @@
-"""Health translations of air quality: dose, cigarettes, safety, timing."""
+"""Metrics: outdoor activity safety scores and best-window finder."""
 
 import numpy as np
 import pandas as pd
 
 from src.aqi import get_category
-
-PM25_PER_CIGARETTE = 22.0
-WHO_DAILY_PM25 = 15.0
 
 SENSITIVITY = {
     "General adult": 1.00,
@@ -26,32 +23,22 @@ ACTIVITY_ADVICE = [
 ]
 
 
-def cigarette_equivalent(pm25, hours=24.0):
-    """Cigarettes-equivalent for a PM2.5 exposure over `hours`."""
-    if pm25 is None or not np.isfinite(pm25) or pm25 < 0:
-        return None
-    return round((float(pm25) * float(hours) / 24.0) / PM25_PER_CIGARETTE, 2)
-
-
-def who_multiple(pm25):
-    """How many times the WHO 24-hour guideline this level is."""
-    if pm25 is None or not np.isfinite(pm25):
-        return None
-    return round(float(pm25) / WHO_DAILY_PM25, 1)
-
-
 def activity_safety_score(aqi, group="General adult"):
     """1-10 safety rating for outdoor activity. 10 is safe, 1 is not."""
     if aqi is None or not np.isfinite(aqi):
         return None
-    base = float(np.interp(aqi, [0, 50, 100, 200, 300, 400, 500],
-                                [10, 9.2, 7.8, 5.0, 2.8, 1.4, 1.0]))
+    base = float(np.interp(
+        aqi,
+        [0, 50, 100, 200, 300, 400, 500],
+        [10, 9.2, 7.8, 5.0, 2.8, 1.4, 1.0],
+    ))
     factor = SENSITIVITY.get(group, 1.0)
     score = 1.0 + (base - 1.0) / factor
     return round(float(np.clip(score, 1.0, 10.0)), 1)
 
 
 def activity_verdict(score):
+    """Return headline and detailed advice for a given safety score."""
     if score is None:
         return "No data", "Not enough readings to judge."
     for threshold, headline, detail in ACTIVITY_ADVICE:
@@ -60,11 +47,11 @@ def activity_verdict(score):
     return "Stay in", ""
 
 
-def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime",
-                        earliest=None, latest=None):
-    """Cleanest contiguous `duration`-hour block in an hourly frame."""
+def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime", earliest=None, latest=None):
+    """Find the cleanest contiguous `duration`-hour window in hourly data."""
     if hourly is None or len(hourly) == 0 or aqi_col not in hourly.columns:
         return None
+
     df = hourly[[time_col, aqi_col]].dropna().copy()
     df[time_col] = pd.to_datetime(df[time_col])
     df = df.sort_values(time_col).reset_index(drop=True)
@@ -80,9 +67,9 @@ def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime",
 
     candidates = []
     for i in range(len(df) - duration + 1):
-        block = df.iloc[i:i + duration]
+        block = df.iloc[i : i + duration]
         spans = (block[time_col].diff().dropna() == pd.Timedelta(hours=1)).all()
-        if not spans or not mask.iloc[i:i + duration].all():
+        if not spans or not mask.iloc[i : i + duration].all():
             continue
         candidates.append({
             "start": block[time_col].iloc[0],
@@ -90,6 +77,7 @@ def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime",
             "mean_aqi": round(float(block[aqi_col].mean())),
             "max_aqi": round(float(block[aqi_col].max())),
         })
+
     if not candidates:
         return None
 

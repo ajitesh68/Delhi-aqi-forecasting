@@ -1,167 +1,65 @@
-"""The app's only data entry point."""
+"""Data loader: live stations, history, weather, and forecast predictions."""
 
 import pandas as pd
+import requests
 import streamlit as st
 
-from src.aqi import add_rolling_aqi, calculate_aqi, get_category
-from src.config import (CPCB_STORE, FORECAST_STATIONS,
-                        OPENMETEO_ARCHIVE, OPENMETEO_FORECAST, POLLUTANTS,
-                        POLLUTANT_LABELS, RECENT_STORE)
+from src.aqi import add_rolling_aqi, get_category
+from src.config import (
+    CPCB_STORE,
+    FORECAST_STATIONS,
+    OPENMETEO_ARCHIVE,
+    OPENMETEO_FORECAST,
+    POLLUTANT_LABELS,
+    RECENT_STORE,
+)
 from src.sources import store
 from src.sources.cpcb_live import fetch_live
 
-AVG_IS_24H = True
-
-LIVE_TTL = 1800
-HISTORY_TTL = 900
+LIVE_TTL = 60
+HISTORY_TTL = 300
 
 
 @st.cache_data(ttl=LIVE_TTL, show_spinner=False)
 def live_stations():
-    """Current AQI at every reporting station."""
+    """Current AQI at every reporting station from the WAQI feed."""
     df, meta = fetch_live()
     if len(df) == 0:
         return df, meta
 
-    latest = (df.sort_values("datetime")
-                .groupby("station", as_index=False)
-                .tail(1)
-                .reset_index(drop=True))
+    # Pick the latest reading for each station
+    latest = (
+        df.sort_values("datetime")
+        .groupby("station", as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
 
-    rows = []
+    categories = []
+    dominant_labels = []
+
     for _, row in latest.iterrows():
         aqi_val = row.get("aqi")
-        if pd.notna(aqi_val) and aqi_val is not None:
-            aqi_int = int(round(float(aqi_val)))
-            category = get_category(aqi_int)
-            raw_dom = str(row.get("dominant", "pm25")).lower().strip()
-            dom_key = "pm2_5" if "pm2" in raw_dom else raw_dom
-            dom_label = POLLUTANT_LABELS.get(dom_key, dom_key.upper())
-            reason = ""
+        if pd.notna(aqi_val):
+            categories.append(get_category(int(aqi_val)))
         else:
-            averages = {p: row[p] for p in POLLUTANTS
-                        if p in row.index and pd.notna(row[p])}
-            result = calculate_aqi(averages)
-            aqi_int = result["aqi"]
-            category = result["category"]
-            dom_key = result["dominant"]
-            dom_label = result["dominant_label"]
-            reason = result["reason"]
+            categories.append("Unknown")
 
-        n_pols = sum(1 for p in POLLUTANTS if p in row.index and pd.notna(row[p]))
-        rows.append({
-            "aqi": aqi_int,
-            "category": category,
-            "dominant": dom_key,
-            "dominant_label": dom_label,
-            "aqi_reason": reason,
-            "n_pollutants": n_pols,
-        })
-    cols_to_drop = [c for c in ["aqi", "category", "dominant", "dominant_label", "aqi_reason", "n_pollutants"] if c in latest.columns]
-    latest = latest.drop(columns=cols_to_drop)
-    latest = pd.concat([latest, pd.DataFrame(rows, index=latest.index)], axis=1)
+        dom = str(row.get("dominant", "pm2_5")).lower().strip()
+        dom_key = "pm2_5" if "pm2" in dom else dom
+        dominant_labels.append(POLLUTANT_LABELS.get(dom_key, dom_key.upper()))
+
+    latest["category"] = categories
+    latest["dominant_label"] = dominant_labels
+    latest["aqi_reason"] = ""
 
     meta["with_aqi"] = int(latest["aqi"].notna().sum())
     meta["total_stations"] = len(latest)
     return latest.sort_values("station").reset_index(drop=True), meta
 
 
-@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
-def history(stations=None, days=None, with_aqi=True, collected_only=False):
-    """Observed hourly history from the parquet store."""
-    start = None
-    if days:
-        start = pd.Timestamp.now().normalize() - pd.Timedelta(days=days)
-    path = RECENT_STORE if collected_only else CPCB_STORE
-    recent = None if collected_only else RECENT_STORE
-
-    if stations:
-        stored = store.load(path, recent=recent)
-        available = stored["station"].dropna().unique()
-        stations = [have for have in available
-                    if any(_same(want, have) for want in stations)] or None
-    df = store.load(path, stations=stations, start=start, recent=recent)
-    if len(df) == 0 or not with_aqi:
-        return df
-    return add_rolling_aqi(df)
-
-
-@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
-def store_status():
-    """What the store currently holds, for honest UI labelling."""
-    df = store.load()
-    collected = len(store.load(RECENT_STORE, recent=None))
-    if len(df) == 0:
-        return {"empty": True, "rows": 0, "collected_rows": 0, "stations": 0,
-                "first": None, "last": None, "lag_hours": None}
-    last = df["datetime"].max()
-    return {
-        "empty": False,
-        "rows": int(len(df)),
-        "collected_rows": int(collected),
-        "stations": int(df["station"].nunique()),
-        "first": df["datetime"].min(),
-        "last": last,
-        "lag_hours": round((pd.Timestamp.now() - last).total_seconds() / 3600, 1),
-        "station_list": sorted(df["station"].dropna().unique().tolist()),
-    }
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def weather(lat, lon, days_back=14, forecast_hours=24):
-    """Observed and forecast weather from Open-Meteo."""
-    import requests
-
-    now = pd.Timestamp.now()
-    fields = "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m"
-    frames = []
-
-    try:
-        archive = requests.get(OPENMETEO_ARCHIVE, params={
-            "latitude": lat, "longitude": lon,
-            "start_date": (now - pd.Timedelta(days=days_back)).strftime("%Y-%m-%d"),
-            "end_date": (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-            "hourly": fields, "timezone": "Asia/Kolkata",
-        }, timeout=30).json()
-        frames.append(_weather_frame(archive))
-    except Exception:
-        pass
-
-    try:
-        ahead = requests.get(OPENMETEO_FORECAST, params={
-            "latitude": lat, "longitude": lon,
-            "past_days": 2, "forecast_days": max(1, forecast_hours // 24 + 1),
-            "hourly": fields, "timezone": "Asia/Kolkata",
-        }, timeout=30).json()
-        frames.append(_weather_frame(ahead))
-    except Exception:
-        pass
-
-    frames = [f for f in frames if f is not None and len(f)]
-    if not frames:
-        return pd.DataFrame()
-    out = pd.concat(frames, ignore_index=True)
-    return (out.dropna(subset=["datetime"])
-               .drop_duplicates("datetime", keep="last")
-               .sort_values("datetime").reset_index(drop=True))
-
-
-def _weather_frame(payload):
-    hourly = (payload or {}).get("hourly")
-    if not hourly:
-        return None
-    return pd.DataFrame({
-        "datetime": pd.to_datetime(hourly["time"]),
-        "temp_c": hourly.get("temperature_2m"),
-        "humidity": hourly.get("relative_humidity_2m"),
-        "pressure_mb": hourly.get("surface_pressure"),
-        "windspeed_kph": hourly.get("wind_speed_10m"),
-        "wind_dir": hourly.get("wind_direction_10m"),
-    })
-
-
 def city_summary(stations):
-    """Headline numbers across the live station network."""
+    """Headline statistics across the entire city."""
     if stations is None or len(stations) == 0:
         return None
     valid = stations.dropna(subset=["aqi"])
@@ -184,14 +82,122 @@ def city_summary(stations):
     }
 
 
+@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
+def history(stations=None, days=None, with_aqi=True, collected_only=False):
+    """Hourly history from the parquet store."""
+    start = None
+    if days:
+        start = pd.Timestamp.now().normalize() - pd.Timedelta(days=days)
+    path = RECENT_STORE if collected_only else CPCB_STORE
+    recent = None if collected_only else RECENT_STORE
+
+    if stations:
+        stored = store.load(path, recent=recent)
+        available = stored["station"].dropna().unique()
+        stations = [have for have in available if any(_same(want, have) for want in stations)] or None
+
+    df = store.load(path, stations=stations, start=start, recent=recent)
+    if len(df) == 0 or not with_aqi:
+        return df
+    return add_rolling_aqi(df)
+
+
+@st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
+def store_status():
+    """Information on what the parquet store currently holds."""
+    df = store.load()
+    collected = len(store.load(RECENT_STORE, recent=None))
+    if len(df) == 0:
+        return {
+            "empty": True, "rows": 0, "collected_rows": 0, "stations": 0,
+            "first": None, "last": None, "lag_hours": None, "station_list": [],
+        }
+    last = df["datetime"].max()
+    return {
+        "empty": False,
+        "rows": int(len(df)),
+        "collected_rows": int(collected),
+        "stations": int(df["station"].nunique()),
+        "first": df["datetime"].min(),
+        "last": last,
+        "lag_hours": round((pd.Timestamp.now() - last).total_seconds() / 3600, 1),
+        "station_list": sorted(df["station"].dropna().unique().tolist()),
+    }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def weather(lat, lon, days_back=14, forecast_hours=24):
+    """Observed and forecast weather from Open-Meteo API."""
+    now = pd.Timestamp.now()
+    fields = "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m"
+    frames = []
+
+    try:
+        archive = requests.get(
+            OPENMETEO_ARCHIVE,
+            params={
+                "latitude": lat, "longitude": lon,
+                "start_date": (now - pd.Timedelta(days=days_back)).strftime("%Y-%m-%d"),
+                "end_date": (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                "hourly": fields, "timezone": "Asia/Kolkata",
+            },
+            timeout=15,
+        ).json()
+        frames.append(_weather_frame(archive))
+    except Exception:
+        pass
+
+    try:
+        ahead = requests.get(
+            OPENMETEO_FORECAST,
+            params={
+                "latitude": lat, "longitude": lon,
+                "past_days": 2, "forecast_days": max(1, forecast_hours // 24 + 1),
+                "hourly": fields, "timezone": "Asia/Kolkata",
+            },
+            timeout=15,
+        ).json()
+        frames.append(_weather_frame(ahead))
+    except Exception:
+        pass
+
+    frames = [f for f in frames if f is not None and len(f)]
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    return (
+        out.dropna(subset=["datetime"])
+        .drop_duplicates("datetime", keep="last")
+        .sort_values("datetime")
+        .reset_index(drop=True)
+    )
+
+
+def _weather_frame(payload):
+    hourly = (payload or {}).get("hourly")
+    if not hourly:
+        return None
+    return pd.DataFrame({
+        "datetime": pd.to_datetime(hourly["time"]),
+        "temp_c": hourly.get("temperature_2m"),
+        "humidity": hourly.get("relative_humidity_2m"),
+        "pressure_mb": hourly.get("surface_pressure"),
+        "windspeed_kph": hourly.get("wind_speed_10m"),
+        "wind_dir": hourly.get("wind_direction_10m"),
+    })
+
+
+def _same(a, b):
+    return str(a).split(",")[0].strip().lower() == str(b).split(",")[0].strip().lower()
+
+
 def forecast_station_options(status=None):
     """Stations that have enough stored history to forecast from."""
     status = status or store_status()
     available = set(status.get("station_list") or [])
     if not available:
         return []
-    matched = [s for s in FORECAST_STATIONS
-               if any(_same(s, a) for a in available)]
+    matched = [s for s in FORECAST_STATIONS if any(_same(s, a) for a in available)]
     resolved = []
     for want in matched:
         for have in available:
@@ -201,16 +207,10 @@ def forecast_station_options(status=None):
     return resolved or sorted(available)
 
 
-def _same(a, b):
-    """Match station names across sources ('Delhi' vs 'New Delhi')."""
-    return str(a).split(",")[0].strip().lower() == str(b).split(",")[0].strip().lower()
-
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def station_weather(station):
     """Observed and forecast weather for one station."""
     import os
-
     from src.config import STORE_DIR
 
     path = os.path.join(STORE_DIR, "weather_hourly.parquet")
@@ -233,7 +233,7 @@ def station_weather(station):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def forecast_24h(station):
-    """Next 24 hours for one station, with the persistence baseline beside it."""
+    """24-hour neural forecast for the chosen station."""
     from src import forecast as fc
 
     if not fc.available():
@@ -249,9 +249,11 @@ def forecast_24h(station):
         return None
 
     observed_weather, ahead = station_weather(match)
-    result = fc.predict(history, match, meta=meta,
-                        weather_history=observed_weather,
-                        weather_forecast=ahead)
+    result = fc.predict(
+        history, match, meta=meta,
+        weather_history=observed_weather,
+        weather_forecast=ahead,
+    )
     if result is None:
         return None
 
@@ -266,5 +268,5 @@ def forecast_24h(station):
 
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def history_raw(station):
-    """Unrolled hourly readings for one station, for model input."""
+    """Raw hourly readings for one station."""
     return store.load(stations=[station]).sort_values("datetime")

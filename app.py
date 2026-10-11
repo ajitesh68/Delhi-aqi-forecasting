@@ -56,22 +56,21 @@ with st.sidebar:
     auth.sidebar_account(user)
 
     st.markdown("---")
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
     st.markdown("**Data sources**")
     if meta.get("stale"):
-        st.warning("Live feed unreachable — showing the last cached sweep.", icon="⚠️")
+        st.warning("Live feed unreachable — showing cached readings.", icon="⚠️")
     elif meta.get("from_cache") and meta.get("cache_age_min") is not None:
-        st.caption(f"Served from a sweep {meta['cache_age_min']:.0f} minutes old. "
-                   f"The CPCB feed publishes hourly, so this is current.")
+        st.caption(f"Cached {meta['cache_age_min']:.0f} mins ago from WAQI live feed.")
     st.caption(
-        f"Live: data.gov.in CPCB feed — {meta.get('total_stations', 0)} stations, "
-        f"{meta.get('with_aqi', 0)} with a full AQI.\n\n"
-        f"Charts: hours collected from that feed, "
-        + (f"{status['collected_rows']:,} so far."
+        f"Live: WAQI station network — {meta.get('total_stations', 0)} stations reporting.\n\n"
+        f"Stored history: "
+        + (f"{status['collected_rows']:,} hourly records."
            if status.get("collected_rows") else "none yet.")
     )
-    if meta.get("co_unit") == "unknown":
-        st.caption("CO is excluded from AQI here: the feed reports it in units "
-                   "that cannot be resolved, and guessing risks a 1000x error.")
 
 
 left, right = st.columns([3, 2])
@@ -85,16 +84,14 @@ with left:
             f"{pill(reporting)} {pill('updated ' + updated)}",
             unsafe_allow_html=True)
 with right:
-    if summary and summary["spread"] > 0:
+    if summary:
         st.markdown(
             f'<div class="glass" style="text-align:center">'
-            f'<div class="eyebrow">Spread across the city right now</div>'
+            f'<div class="eyebrow">City AQI Range (Cleanest to Most Polluted)</div>'
             f'<div class="metric-value" style="color:{styles.ACCENT}">'
-            f'{summary["spread"]} AQI</div>'
-            f'<div class="metric-sub">{short(summary["best_station"])} '
-            f'{summary["best_aqi"]} &nbsp;&rarr;&nbsp; '
-            f'{short(summary["worst_station"])} {summary["worst_aqi"]}. '
-            f'A single city-wide number hides this.</div></div>',
+            f'{summary["best_aqi"]} &ndash; {summary["worst_aqi"]}</div>'
+            f'<div class="metric-sub">Cleanest: <b>{short(summary["best_station"])} ({summary["best_aqi"]})</b> &bull; '
+            f'Highest: <b>{short(summary["worst_station"])} ({summary["worst_aqi"]})</b></div></div>',
             unsafe_allow_html=True)
 
 st.markdown("")
