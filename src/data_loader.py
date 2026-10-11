@@ -4,9 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from src.aqi import add_rolling_aqi, calculate_aqi, get_category
-from src.config import (CPCB_STORE, FORECAST_STATIONS, NCR_CITIES,
+from src.config import (CPCB_STORE, FORECAST_STATIONS,
                         OPENMETEO_ARCHIVE, OPENMETEO_FORECAST, POLLUTANTS,
-                        RECENT_STORE)
+                        POLLUTANT_LABELS, RECENT_STORE)
 from src.sources import store
 from src.sources.cpcb_live import fetch_live
 
@@ -17,9 +17,9 @@ HISTORY_TTL = 900
 
 
 @st.cache_data(ttl=LIVE_TTL, show_spinner=False)
-def live_stations(cities=("Delhi",)):
-    """Current AQI at every reporting station in `cities`."""
-    df, meta = fetch_live(list(cities) if cities else NCR_CITIES)
+def live_stations():
+    """Current AQI at every reporting station."""
+    df, meta = fetch_live()
     if len(df) == 0:
         return df, meta
 
@@ -30,17 +30,35 @@ def live_stations(cities=("Delhi",)):
 
     rows = []
     for _, row in latest.iterrows():
-        averages = {p: row[p] for p in POLLUTANTS
-                    if p in row.index and pd.notna(row[p])}
-        result = calculate_aqi(averages)
+        aqi_val = row.get("aqi")
+        if pd.notna(aqi_val) and aqi_val is not None:
+            aqi_int = int(round(float(aqi_val)))
+            category = get_category(aqi_int)
+            raw_dom = str(row.get("dominant", "pm25")).lower().strip()
+            dom_key = "pm2_5" if "pm2" in raw_dom else raw_dom
+            dom_label = POLLUTANT_LABELS.get(dom_key, dom_key.upper())
+            reason = ""
+        else:
+            averages = {p: row[p] for p in POLLUTANTS
+                        if p in row.index and pd.notna(row[p])}
+            result = calculate_aqi(averages)
+            aqi_int = result["aqi"]
+            category = result["category"]
+            dom_key = result["dominant"]
+            dom_label = result["dominant_label"]
+            reason = result["reason"]
+
+        n_pols = sum(1 for p in POLLUTANTS if p in row.index and pd.notna(row[p]))
         rows.append({
-            "aqi": result["aqi"],
-            "category": result["category"],
-            "dominant": result["dominant"],
-            "dominant_label": result["dominant_label"],
-            "aqi_reason": result["reason"],
-            "n_pollutants": len(averages),
+            "aqi": aqi_int,
+            "category": category,
+            "dominant": dom_key,
+            "dominant_label": dom_label,
+            "aqi_reason": reason,
+            "n_pollutants": n_pols,
         })
+    cols_to_drop = [c for c in ["aqi", "category", "dominant", "dominant_label", "aqi_reason", "n_pollutants"] if c in latest.columns]
+    latest = latest.drop(columns=cols_to_drop)
     latest = pd.concat([latest, pd.DataFrame(rows, index=latest.index)], axis=1)
 
     meta["with_aqi"] = int(latest["aqi"].notna().sum())

@@ -4,8 +4,6 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-RAW_DIR = os.path.join(DATA_DIR, "raw")
-PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
 STORE_DIR = os.path.join(DATA_DIR, "store")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 CACHE_DIR = os.path.join(DATA_DIR, "cache")
@@ -15,7 +13,7 @@ RECENT_STORE = os.path.join(STORE_DIR, "cpcb_recent.parquet")
 TREND_DAYS = {"day": 1, "week": 7, "month": 30}
 RECENT_WINDOW_DAYS = max(TREND_DAYS.values()) + 10
 
-for _d in (DATA_DIR, RAW_DIR, PROCESSED_DIR, STORE_DIR, MODELS_DIR, CACHE_DIR):
+for _d in (DATA_DIR, STORE_DIR, MODELS_DIR, CACHE_DIR):
     os.makedirs(_d, exist_ok=True)
 
 

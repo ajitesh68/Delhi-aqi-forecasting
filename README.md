@@ -36,10 +36,6 @@ see how much to trust it.
 **History.** The last 24 hours, 7 days or 30 days of collected readings.
 Hours the network never reported are drawn dotted and marked estimated.
 
-**Your exposure.** What the air costs you personally — cigarette
-equivalent, activity safety for your sensitivity group, and commute
-exposure between two areas.
-
 ## Using it
 
 Pick your station in the sidebar; everything on the page follows it. Set
@@ -117,7 +113,7 @@ src/
   data_loader.py        the app's only data entry point
   forecast.py           model loading and inference
   analysis.py           daily roll-ups from observed hours
-  metrics.py            exposure, activity safety, best window
+  metrics.py            activity safety, best window
   visualizations.py     Plotly charts
   maps.py               Pydeck maps
   sources/              data.gov.in, OpenAQ, parquet store

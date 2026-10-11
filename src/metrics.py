@@ -60,44 +60,6 @@ def activity_verdict(score):
     return "Stay in", ""
 
 
-def exposure_dose(segments):
-    """Total PM2.5 dose across a day described as (hours, pm25) segments."""
-    segments = [(float(h), float(p)) for h, p in segments
-                if h and p is not None and np.isfinite(p)]
-    if not segments:
-        return None
-    total_hours = sum(h for h, _ in segments)
-    if total_hours <= 0:
-        return None
-    ug_hours = sum(h * p for h, p in segments)
-    mean_pm25 = ug_hours / total_hours
-    return {
-        "hours": round(total_hours, 1),
-        "mean_pm25": round(mean_pm25, 1),
-        "ug_hours": round(ug_hours, 1),
-        "cigarettes": cigarette_equivalent(mean_pm25, total_hours),
-        "who_multiple": who_multiple(mean_pm25),
-    }
-
-
-def commute_exposure(home_pm25, work_pm25, commute_pm25, hours_home=14.0,
-                     hours_work=8.0, hours_commute=2.0, indoor_factor=0.55):
-    """Daily dose for a home / commute / work routine."""
-    segments = [
-        (hours_home, (home_pm25 or 0) * indoor_factor),
-        (hours_work, (work_pm25 or 0) * indoor_factor),
-        (hours_commute, commute_pm25 if commute_pm25 is not None else 0),
-    ]
-    result = exposure_dose(segments)
-    if result:
-        result["breakdown"] = {
-            "Home (indoor)": round(hours_home * (home_pm25 or 0) * indoor_factor, 1),
-            "Work (indoor)": round(hours_work * (work_pm25 or 0) * indoor_factor, 1),
-            "Commute (outdoor)": round(hours_commute * (commute_pm25 or 0), 1),
-        }
-    return result
-
-
 def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime",
                         earliest=None, latest=None):
     """Cleanest contiguous `duration`-hour block in an hourly frame."""

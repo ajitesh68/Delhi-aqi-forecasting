@@ -115,6 +115,8 @@ def records_to_frame(records):
             "lon": _to_float(lon),
             "source": "waqi",
             "is_observed": True,
+            "aqi": _to_float(rec.get("aqi")),
+            "dominant": str(rec.get("dominentpol", "pm25")).lower(),
         }
         
         # Map WAQI pollutants to our canonical names

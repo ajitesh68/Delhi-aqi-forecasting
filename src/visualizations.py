@@ -177,18 +177,3 @@ def forecast_chart(hours, values, observed=None, title="Next 24 hours"):
                       hovermode="x unified")
     return fig
 
-
-def exposure_chart(breakdown, title="Where your daily dose comes from"):
-    if not breakdown:
-        return _empty()
-    labels, values = list(breakdown.keys()), list(breakdown.values())
-    fig = go.Figure(go.Bar(
-        x=values, y=labels, orientation="h",
-        marker=dict(color=[SERIES[0], SERIES[1], SERIES[3]][:len(labels)]),
-        text=[f"{v:.0f}" for v in values], textposition="outside",
-        textfont=dict(color=TEXT, size=11),
-        hovertemplate="%{y}<br>%{x:.0f} ug-hours<extra></extra>"))
-    fig.update_layout(title=title, height=230,
-                      xaxis=dict(title="PM2.5 concentration x hours"),
-                      yaxis=dict(title=""), margin=dict(l=4, r=46))
-    return fig

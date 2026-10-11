@@ -9,7 +9,7 @@ st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
 from src import (analysis, auth, data_loader, maps, metrics, styles,
                  visualizations as viz)
 from src.aqi import health_advisory
-from src.config import AQI_COLORS, NCR_CITIES
+from src.config import AQI_COLORS
 from src.metrics import SENSITIVITY
 
 styles.inject(st)
@@ -30,16 +30,8 @@ def short(name):
 
 
 
-include_ncr = st.sidebar.toggle(
-    "Include wider NCR", value=False,
-    help="Adds Noida, Ghaziabad, Gurugram and Faridabad. The open data.gov.in "
-         "key returns 10 records per request, so each extra city adds a few "
-         "seconds on a cold cache.")
-cities = tuple(NCR_CITIES) if include_ncr else ("Delhi",)
-
-with st.spinner(f"Reading live CPCB stations ({', '.join(cities[:2])}"
-                f"{'...' if len(cities) > 2 else ''})..."):
-    stations, meta = data_loader.live_stations(cities)
+with st.spinner("Reading live CPCB stations..."):
+    stations, meta = data_loader.live_stations()
 
 status = data_loader.store_status()
 summary = data_loader.city_summary(stations)
@@ -132,18 +124,16 @@ with c1:
              f'CPCB needs three pollutants including a PM measurement.</div>')
 
 with c2:
-    pm25 = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else None
-    cigs = metrics.cigarette_equivalent(pm25) if pm25 else None
-    who = metrics.who_multiple(pm25) if pm25 else None
-    if cigs is not None:
-        card(f'<div class="eyebrow">A day in this air</div>'
-             f'<div class="metric-value">{cigs:g} <span style="font-size:1.1rem;'
-             f'font-weight:600;opacity:.6">cigarettes</span></div>'
-             f'<div class="metric-sub">PM2.5 is {pm25:.0f} µg/m³, about '
-             f'<b>{who}x</b> the WHO daily guideline. Equivalence follows '
-             f'Berkeley Earth: 22 µg/m³ over 24 h is roughly one cigarette.</div>')
+    pm25_aqi = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else None
+    pm10_aqi = row["pm10"] if row is not None and pd.notna(row.get("pm10")) else None
+    if pm25_aqi is not None:
+        pm10_sub = f" &bull; PM10 AQI: <b>{pm10_aqi:.0f}</b>" if pm10_aqi else ""
+        card(f'<div class="eyebrow">Key Pollutants</div>'
+             f'<div class="metric-value">{pm25_aqi:.0f} <span style="font-size:1.1rem;'
+             f'font-weight:600;opacity:.6">PM2.5 AQI</span></div>'
+             f'<div class="metric-sub">Individual sub-index reported by station{pm10_sub}.</div>')
     else:
-        card('<div class="eyebrow">A day in this air</div>'
+        card('<div class="eyebrow">Key Pollutants</div>'
              '<div class="metric-value" style="opacity:.4">--</div>'
              '<div class="metric-sub">This station is not reporting PM2.5 right now.</div>')
 
@@ -164,10 +154,8 @@ with c3:
 st.markdown("")
 
 
-(tab_live, tab_when, tab_forecast, tab_history,
- tab_health, tab_about) = st.tabs(
-    ["Live map", "When to go out", "Tomorrow", "History",
-     "Your exposure", "How this works"])
+(tab_live, tab_when, tab_forecast, tab_history) = st.tabs(
+    ["Live map", "When to go out", "Tomorrow", "History"])
 
 
 with tab_live:
@@ -348,58 +336,6 @@ with tab_history:
             st.caption(note)
 
 
-with tab_health:
-    st.markdown("### Your day, not the city's")
-    st.markdown('<div class="note">A city-wide AQI is not your exposure. '
-                'Where you spend your hours matters more than the headline '
-                'number.</div>', unsafe_allow_html=True)
-    st.markdown("")
-
-    e1, e2 = st.columns([1, 1.3])
-    with e1:
-        names = sorted(stations["station"].dropna().unique())
-        home = st.selectbox("Home area", names, index=default, format_func=short)
-        work = st.selectbox("Work area", names,
-                            index=min(1, len(names) - 1), format_func=short)
-        hours_out = st.slider("Hours outdoors (commute, walking)", 0.0, 8.0, 2.0, 0.5)
-        hours_work = st.slider("Hours at work", 0.0, 14.0, 8.0, 0.5)
-        indoor = st.slider("Indoor air as a fraction of outdoor", 0.2, 1.0, 0.55, 0.05,
-                           help="An unfiltered Indian home or office typically "
-                                "sits near 0.5-0.6. A running purifier pushes it lower.")
-
-    def pm_of(name):
-        sel = stations[stations["station"] == name]
-        if len(sel) == 0 or pd.isna(sel.iloc[0].get("pm2_5")):
-            return None
-        return float(sel.iloc[0]["pm2_5"])
-
-    home_pm, work_pm = pm_of(home), pm_of(work)
-    commute_pm = max(v for v in [home_pm, work_pm, 0] if v is not None)
-    hours_home = max(0.0, 24 - hours_work - hours_out)
-
-    with e2:
-        if home_pm is None and work_pm is None:
-            st.info("Neither selected station is reporting PM2.5 right now.")
-        else:
-            result = metrics.commute_exposure(
-                home_pm or 0, work_pm or 0, commute_pm,
-                hours_home=hours_home, hours_work=hours_work,
-                hours_commute=hours_out, indoor_factor=indoor)
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Effective PM2.5", f"{result['mean_pm25']:.0f}")
-            k2.metric("Cigarettes today", f"{result['cigarettes']:g}")
-            k3.metric("WHO guideline", f"{result['who_multiple']}x")
-            st.plotly_chart(viz.exposure_chart(result["breakdown"]),
-                            use_container_width=True)
-            share = result["breakdown"]["Commute (outdoor)"] / max(result["ug_hours"], 1)
-            st.markdown(
-                f'<div class="note">Those {hours_out:g} outdoor hours are '
-                f'{hours_out / 24 * 100:.0f}% of your day but '
-                f'<b>{share * 100:.0f}%</b> of your PM2.5 intake. Shifting them '
-                f'to a cleaner hour is the cheapest thing you can change.</div>',
-                unsafe_allow_html=True)
-
-
 
 with tab_forecast:
     st.markdown("## The next 24 hours")
@@ -520,40 +456,3 @@ with tab_forecast:
             "winter, so it under-predicts the sharpest peaks. Compare the "
             "forecast range against the observed line before relying on it "
             "during a severe episode.")
-
-with tab_about:
-    st.markdown("### How this works")
-    a1, a2 = st.columns(2)
-    with a1:
-        st.markdown("""
-**Where the numbers come from**
-
-Every reading is from the CPCB / DPCC ground-monitoring network, served
-through data.gov.in — the same monitors behind the official bulletin.
-Weather comes from Open-Meteo; pollutants never do.
-
-**How the AQI is worked out**
-
-The CPCB index runs on rolling averages, not on the reading of the
-moment: 24 hours for PM2.5, PM10, NO₂, SO₂ and NH₃, 8 hours for CO and
-O₃. At least three pollutants must be available, one of them a PM. A
-station that cannot meet that shows no AQI rather than a number built
-from whatever happened to report.
-        """)
-    with a2:
-        st.markdown("""
-**The forecast**
-
-The next 24 hours of PM2.5 are predicted by a neural network reading the
-past week at that station together with the coming day's weather. Each
-forecast is scored against simply assuming tomorrow repeats today, and
-that comparison is shown with it — if the model is not beating it, you
-can see so.
-
-**What it cannot do**
-
-Stations go quiet for hours at a time, and a chart drawn from thin data
-says so rather than smoothing over it. Hours the network never recorded
-are drawn dotted and marked estimated. The map's colour wash between
-monitors is an interpolation, not a measurement.
-        """)
