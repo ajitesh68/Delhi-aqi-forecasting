@@ -1,12 +1,9 @@
-"""CPCB AQI conformance tests."""
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.aqi import (AVERAGING_HOURS, add_rolling_aqi, calculate_aqi, get_category,
                      rolling_averages, sub_index, sub_index_series)
-
 
 class TestSubIndex:
     @pytest.mark.parametrize("pollutant,concentration,expected", [
@@ -43,7 +40,6 @@ class TestSubIndex:
         for value, got in zip(values, vector):
             assert abs(round(got) - sub_index("pm2_5", value)) <= 1
 
-
 class TestCalculateAqi:
     def test_max_sub_index_wins_and_names_dominant(self):
         result = calculate_aqi({"pm2_5": 90, "pm10": 100, "no2": 40, "o3": 50})
@@ -74,7 +70,6 @@ class TestCalculateAqi:
         assert result["aqi"] > 400
 
     def test_cpcb_16_hour_minimum_for_24_hour_pollutants(self):
-        """CPCB's own rule: a 24-hourly sub-index needs >=16 hours, not 12."""
         below = calculate_aqi({"pm2_5": (300, 15), "pm10": (100, 20),
                                "no2": (40, 20), "o3": (50, 20)})
         assert "pm2_5" not in below["sub_indices"]
@@ -87,7 +82,6 @@ class TestCalculateAqi:
         result = calculate_aqi({})
         assert not result["valid"]
         assert result["aqi"] is None
-
 
 class TestRollingWindows:
     def test_averaging_periods_follow_cpcb(self):
@@ -107,7 +101,6 @@ class TestRollingWindows:
         assert out["co"][0] == pytest.approx(5.0, abs=0.1)
 
     def test_spike_takes_a_full_day_to_register(self):
-        """A one-hour spike must not move a 24-hour average to the spike value."""
         index = pd.date_range("2026-01-01", periods=48, freq="h")
         pm = np.full(48, 60.0)
         pm[-1] = 500.0
@@ -132,7 +125,6 @@ class TestRollingWindows:
         out = add_rolling_aqi(df)
         assert out["aqi"].isna().all()
 
-
 class TestCategories:
     @pytest.mark.parametrize("aqi,label", [
         (0, "Good"), (50, "Good"), (51, "Satisfactory"), (100, "Satisfactory"),
@@ -146,10 +138,8 @@ class TestCategories:
         assert get_category(None) == "Unknown"
         assert get_category(float("nan")) == "Unknown"
 
-
 class TestRealisticDelhiDay:
     def test_severe_winter_day(self):
-        """A Delhi winter morning lands in Severe, driven by particulates."""
         result = calculate_aqi({"pm2_5": (310, 24), "pm10": (420, 24),
                                 "no2": (95, 24), "so2": (22, 24),
                                 "o3": (30, 8), "co": (3.1, 8)})
@@ -157,7 +147,6 @@ class TestRealisticDelhiDay:
         assert result["category"] == "Severe"
 
     def test_coarse_dust_episode_is_led_by_pm10(self):
-        """A dust storm inverts the usual ordering: PM10 outruns PM2.5."""
         result = calculate_aqi({"pm2_5": (310, 24), "pm10": (480, 24),
                                 "no2": (95, 24), "o3": (30, 8)})
         assert result["dominant"] == "pm10"

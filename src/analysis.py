@@ -1,18 +1,13 @@
-"""Roll-ups computed from observed CPCB readings."""
-
 import pandas as pd
 
 MIN_HOURS_PER_DAY = 12
-
 
 def _prep(df):
     d = df.copy()
     d["datetime"] = pd.to_datetime(d["datetime"])
     return d.dropna(subset=["datetime"])
 
-
 def diurnal_profile(df, value="aqi_instant", by="station"):
-    """Average value for each hour of the day."""
     d = _prep(df)
     if value not in d.columns:
         return pd.DataFrame()
@@ -23,7 +18,6 @@ def diurnal_profile(df, value="aqi_instant", by="station"):
                   p75=lambda s: s.quantile(.75), n_observed="count")
              .reset_index())
     return out.sort_values(keys).reset_index(drop=True)
-
 
 def daily_summary(df, value="aqi", by="station", min_hours=MIN_HOURS_PER_DAY):
     d = _prep(df)
@@ -37,9 +31,7 @@ def daily_summary(df, value="aqi", by="station", min_hours=MIN_HOURS_PER_DAY):
     out["sparse"] = out["n_observed"] < min_hours
     return out.sort_values(keys).reset_index(drop=True)
 
-
 def fill_daily_gaps(daily, by="station", max_run=None):
-    """Interpolate absent days, flagging every filled row as estimated."""
     if len(daily) == 0 or "date" not in daily.columns:
         return daily
 

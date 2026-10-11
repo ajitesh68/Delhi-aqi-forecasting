@@ -1,5 +1,3 @@
-"""Serving side of the 24-hour forecast."""
-
 import json
 from pathlib import Path
 
@@ -17,16 +15,12 @@ MODEL_PATH = MODEL_DIR / "pm25_24h.keras"
 META_PATH = MODEL_DIR / "meta.json"
 SCORECARD_PATH = MODEL_DIR / "scorecard.json"
 
-
 def available():
-    """Whether a trained model and its metadata are both on disk."""
     return MODEL_PATH.exists() and META_PATH.exists()
-
 
 def load_meta():
     with open(META_PATH, encoding="utf-8") as fh:
         return json.load(fh)
-
 
 def load_scorecard():
     if not SCORECARD_PATH.exists():
@@ -34,16 +28,13 @@ def load_scorecard():
     with open(SCORECARD_PATH, encoding="utf-8") as fh:
         return json.load(fh)
 
-
 _model = None
-
 
 def load_model():
     global _model
     if _model is None:
         from tensorflow import keras
-        # Patch: the saved model used a Keras version where GlorotUniform
-        # accepted input_axes/output_axes. Current Keras removed them.
+
         import keras.src.initializers.random_initializers as _ri
         _orig_init = _ri.GlorotUniform.__init__
         def _patched_init(self, seed=None, **kwargs):
@@ -60,7 +51,6 @@ def load_model():
             _ri.GlorotUniform.__init__ = _orig_init
     return _model
 
-
 def _time_features(index):
     hour = index.hour.to_numpy()
     dow = index.dayofweek.to_numpy()
@@ -71,7 +61,6 @@ def _time_features(index):
         np.sin(2 * np.pi * doy / 365.25), np.cos(2 * np.pi * doy / 365.25),
     ]).astype(np.float32)
 
-
 def _wind_components(frame):
     if "wind_dir" not in frame.columns or "wind_kph" not in frame.columns:
         return frame
@@ -81,7 +70,6 @@ def _wind_components(frame):
     frame["wind_u"] = speed * np.sin(radians)
     frame["wind_v"] = speed * np.cos(radians)
     return frame
-
 
 def _scale_weather(frame, stats):
     columns = []
@@ -95,9 +83,7 @@ def _scale_weather(frame, stats):
         columns.append(((raw - entry["mean"]) / entry["scale"]).astype(np.float32))
     return np.column_stack(columns)
 
-
 def build_future(forecast_weather, hours, weather_stats):
-    """The forecast branch: weather over the hours being predicted."""
     frame = pd.DataFrame({"datetime": hours})
     if forecast_weather is not None and len(forecast_weather):
         frame = frame.merge(_wind_components(forecast_weather),
@@ -109,14 +95,11 @@ def build_future(forecast_weather, hours, weather_stats):
                              np.cos(2 * np.pi * hour / 24)]).astype(np.float32)
     return np.hstack([scaled, times]).astype(np.float32)
 
-
 MIN_WINDOW_COVERAGE = 0.25
 MIN_BASELINE_COVERAGE = 0.15
 
-
 def choose_anchor(history, min_coverage=MIN_WINDOW_COVERAGE,
                   min_baseline=MIN_BASELINE_COVERAGE):
-    """Latest hour with a usable window of history behind it."""
     d = history.sort_values("datetime").drop_duplicates("datetime")
     if len(d) == 0:
         return None
@@ -136,9 +119,7 @@ def choose_anchor(history, min_coverage=MIN_WINDOW_COVERAGE,
     usable = full.index[(window >= min_coverage) & (baseline >= min_baseline)]
     return usable[-1] if len(usable) else None
 
-
 def build_window(history, station, meta, weather_history=None, anchor=None):
-    """WINDOW_SIZE hours ending at `anchor`, plus a completeness score."""
     scalers = meta["scalers"].get(station)
     if scalers is None:
         return None
@@ -185,10 +166,8 @@ def build_window(history, station, meta, weather_history=None, anchor=None):
     beyond = float(np.mean(out_of_range)) if out_of_range else 0.0
     return features, float(observed.mean()), beyond
 
-
 def predict(history, station, meta=None, smearing=1.0,
             weather_history=None, weather_forecast=None):
-    """24 hourly PM2.5 values in ug/m3, starting one hour after `history`."""
     meta = meta or load_meta()
     anchor = choose_anchor(history)
     if anchor is None:
@@ -231,9 +210,7 @@ def predict(history, station, meta=None, smearing=1.0,
         "anchor": anchor,
     }
 
-
 def forecast_aqi(history, forecast_pm25, forecast_hours):
-    """AQI for each forecast hour, on proper CPCB rolling windows."""
     window = AVERAGING_HOURS.get("pm2_5", 24)
     recent = (history.sort_values("datetime")["pm2_5"]
                      .dropna().tail(window - 1).to_numpy(dtype=float))
@@ -248,15 +225,12 @@ def forecast_aqi(history, forecast_pm25, forecast_hours):
                      "aqi": result["aqi"], "category": result["category"]})
     return pd.DataFrame(rows)
 
-
 def persistence_baseline(history, hours=FORECAST_HOURS):
-    """What tomorrow looks like if it looks like today."""
     recent = (history.sort_values("datetime")["pm2_5"]
                      .dropna().tail(24).to_numpy(dtype=float))
     if len(recent) == 0:
         return None
     return np.full(hours, float(recent.mean()))
-
 
 SCENARIOS = {
     "As forecast": {},
@@ -268,9 +242,7 @@ SCENARIOS = {
     "Rain arrives": {"precip_mm": ("=", 2.0), "humidity": ("=", 90.0)},
 }
 
-
 def apply_scenario(weather_forecast, scenario):
-    """Return a copy of the forecast weather with one scenario applied."""
     changes = SCENARIOS.get(scenario) or {}
     if not changes or weather_forecast is None or len(weather_forecast) == 0:
         return weather_forecast
@@ -295,10 +267,8 @@ def apply_scenario(weather_forecast, scenario):
         out["wind_v"] = speed * np.cos(radians)
     return out
 
-
 def scenario_sweep(history, station, weather_history, weather_forecast,
                    meta=None, scenarios=None):
-    """Run every scenario through the model and report the spread."""
     meta = meta or load_meta()
     rows = []
     for name in (scenarios or SCENARIOS):

@@ -1,5 +1,3 @@
-"""Pydeck maps over Delhi-NCR monitoring stations."""
-
 import pandas as pd
 import pydeck as pdk
 
@@ -15,9 +13,7 @@ TOOLTIP = {
               "fontSize": "12px", "borderRadius": "8px", "padding": "8px"},
 }
 
-
 def _prepare(stations):
-    """Attach the display fields the deck tooltip and layers need."""
     d = stations.dropna(subset=["lat", "lon"]).copy()
     if len(d) == 0:
         return d
@@ -43,9 +39,7 @@ def _prepare(stations):
     d["weight"] = aqi.fillna(0).clip(0, 500).astype(float)
     return d
 
-
 def station_map(stations, zoom=9.6, height=520, style="dark"):
-    """Scatter map of live station AQI."""
     d = _prepare(stations)
     if len(d) == 0:
         return None
@@ -64,9 +58,7 @@ def station_map(stations, zoom=9.6, height=520, style="dark"):
             zoom=zoom, pitch=0, height=height),
     )
 
-
 def heatmap(stations, zoom=9.4, height=520, style="dark"):
-    """Interpolated AQI surface plus the station points that produced it."""
     d = _prepare(stations)
     d = d[d["aqi_value"].notna()]
     if len(d) == 0:
@@ -91,9 +83,7 @@ def heatmap(stations, zoom=9.4, height=520, style="dark"):
             zoom=zoom, pitch=0, height=height),
     )
 
-
 def column_map(stations, zoom=9.3, height=520, style="dark"):
-    """3D columns: height and colour both encode AQI."""
     d = _prepare(stations)
     d = d[d["aqi_value"].notna()]
     if len(d) == 0:
@@ -112,7 +102,6 @@ def column_map(stations, zoom=9.3, height=520, style="dark"):
             latitude=DELHI_CENTER["lat"], longitude=DELHI_CENTER["lon"],
             zoom=zoom, pitch=48, bearing=12, height=height),
     )
-
 
 def _style(name):
     return {

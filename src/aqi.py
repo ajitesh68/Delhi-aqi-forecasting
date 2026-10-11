@@ -1,5 +1,3 @@
-"""CPCB National Air Quality Index."""
-
 import math
 
 import numpy as np
@@ -33,9 +31,7 @@ PM_POLLUTANTS = ("pm2_5", "pm10")
 MIN_SUBINDICES = 3
 MIN_COVERAGE = 16 / 24
 
-
 def sub_index(pollutant, concentration):
-    """CPCB sub-index for one pollutant at an already-averaged concentration."""
     if pollutant not in BREAKPOINTS or concentration is None:
         return None
     try:
@@ -54,9 +50,7 @@ def sub_index(pollutant, concentration):
             return int(round((ihi - ilo) / (hi - lo) * (c - lo) + ilo))
     return 500
 
-
 def rolling_averages(df, now=None):
-    """Collapse an hourly frame into one CPCB-averaged value per pollutant."""
     if df is None or len(df) == 0:
         return {}
     d = df.copy()
@@ -75,9 +69,7 @@ def rolling_averages(df, now=None):
         out[pollutant] = (float(vals.mean()), int(len(vals)))
     return out
 
-
 def calculate_aqi(averages, min_coverage=MIN_COVERAGE, require_three=True):
-    """AQI from CPCB rolling averages."""
     subs, coverage = {}, {}
     for pollutant, entry in (averages or {}).items():
         if isinstance(entry, (tuple, list)):
@@ -114,17 +106,13 @@ def calculate_aqi(averages, min_coverage=MIN_COVERAGE, require_three=True):
         "reason": "",
     }
 
-
 def _invalid(reason, subs=None):
     return {"aqi": None, "category": "Unknown", "dominant": None,
             "dominant_label": None, "sub_indices": subs or {}, "coverage": {},
             "valid": False, "reason": reason}
 
-
 def aqi_from_hourly(df, now=None, min_coverage=MIN_COVERAGE):
-    """Convenience: hourly frame -> AQI result."""
     return calculate_aqi(rolling_averages(df, now=now), min_coverage=min_coverage)
-
 
 def get_category(aqi):
     if aqi is None or not np.isfinite(aqi):
@@ -133,7 +121,6 @@ def get_category(aqi):
         if lo <= aqi <= hi:
             return label
     return "Severe"
-
 
 def health_advisory(category):
     return {
@@ -146,9 +133,7 @@ def health_advisory(category):
         "Unknown": "Not enough data to rate air quality right now.",
     }.get(category, "")
 
-
 def sub_index_series(pollutant, values):
-    """Vectorised sub-index over an array of already-averaged concentrations."""
     bands = BREAKPOINTS.get(pollutant)
     if bands is None:
         return pd.Series(np.nan, index=getattr(values, "index", None))
@@ -162,9 +147,7 @@ def sub_index_series(pollutant, values):
     out[v > xs[-1]] = 500.0
     return out
 
-
 def add_rolling_aqi(df, station_col="station", min_coverage=MIN_COVERAGE):
-    """Attach CPCB rolling averages, per-pollutant sub-indices and AQI."""
     if df is None or len(df) == 0:
         return df
     out = []

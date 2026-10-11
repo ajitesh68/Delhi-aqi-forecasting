@@ -1,5 +1,3 @@
-"""Central configuration: paths, constants, stations, and API settings."""
-
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +13,6 @@ RECENT_WINDOW_DAYS = 40
 
 for _d in (DATA_DIR, STORE_DIR, MODELS_DIR, CACHE_DIR):
     os.makedirs(_d, exist_ok=True)
-
 
 POLLUTANTS = ["pm2_5", "pm10", "no2", "so2", "o3", "co", "nh3"]
 
@@ -78,9 +75,7 @@ MAX_IMPUTED_FRAC = 0.10
 OPENMETEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 OPENMETEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
 
-
 def load_env():
-    """Load key-value pairs from .env file."""
     path = os.path.join(BASE_DIR, ".env")
     if not os.path.exists(path):
         return
@@ -92,8 +87,6 @@ def load_env():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
-
 def waqi_key():
-    """Retrieve WAQI API key from environment or .env."""
     load_env()
     return os.environ.get("WAQI_API_KEY", "")

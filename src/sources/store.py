@@ -1,5 +1,3 @@
-"""Parquet store for CPCB hourly observations."""
-
 import os
 import pandas as pd
 
@@ -11,11 +9,9 @@ SOURCE_PRIORITY = {"openaq": 3, "datagov": 2, "interpolated": 1}
 META_COLUMNS = ["datetime", "station", "city", "lat", "lon", "source", "is_observed"]
 COLUMNS = META_COLUMNS + POLLUTANTS
 
-
 def empty_frame():
     df = pd.DataFrame(columns=COLUMNS)
     return _coerce(df)
-
 
 def _coerce(df):
     df = df.copy()
@@ -33,16 +29,12 @@ def _coerce(df):
     df["is_observed"] = df["is_observed"].fillna(False).astype(bool)
     return df[COLUMNS]
 
-
 def read_file(path):
-    """One parquet file, coerced to the store schema. Missing file is empty."""
     if not os.path.exists(path):
         return empty_frame()
     return _coerce(pd.read_parquet(path))
 
-
 def load(path=CPCB_STORE, stations=None, start=None, end=None, recent=RECENT_STORE):
-    """The whole store: archive plus the rolling recent window."""
     df = read_file(path)
     if recent:
         extra = read_file(recent)
@@ -56,14 +48,11 @@ def load(path=CPCB_STORE, stations=None, start=None, end=None, recent=RECENT_STO
         df = df[df["datetime"] <= pd.Timestamp(end)]
     return df.sort_values(["station", "datetime"]).reset_index(drop=True)
 
-
 def save(df, path=CPCB_STORE):
     os.makedirs(STORE_DIR, exist_ok=True)
     _coerce(df).to_parquet(path, index=False)
 
-
 def merge(existing, incoming):
-    """Union two frames, keeping the higher-priority source per station-hour."""
     existing, incoming = _coerce(existing), _coerce(incoming)
     if len(incoming) == 0:
         return existing
@@ -85,9 +74,7 @@ def merge(existing, incoming):
     out = out.drop(columns=["_rank"])
     return _coerce(out).sort_values(["station", "datetime"]).reset_index(drop=True)
 
-
 def canonical_names(incoming, existing):
-    """Rename incoming stations to match ones already stored."""
     if len(incoming) == 0 or len(existing) == 0:
         return incoming
 
@@ -108,18 +95,14 @@ def canonical_names(incoming, existing):
     out["station"] = out["station"].replace(mapping)
     return out
 
-
 def append(incoming, path=CPCB_STORE):
-    """Merge rows into one store file. Used by the archive backfill."""
     existing = load(path, recent=None)
     merged = merge(existing, canonical_names(incoming, existing))
     save(merged, path)
     return merged
 
-
 def append_recent(incoming, path=RECENT_STORE, archive=CPCB_STORE,
                   days=RECENT_WINDOW_DAYS):
-    """Add an hour to the rolling file and drop whatever fell out of it."""
     existing = load(path, recent=None)
     reference = load(archive, recent=None)
     if len(reference) == 0:
@@ -133,9 +116,7 @@ def append_recent(incoming, path=RECENT_STORE, archive=CPCB_STORE,
     save(merged, path)
     return merged
 
-
 def coverage(df, pollutant="pm2_5"):
-    """Per-station coverage summary: span, observed hours, gap fraction."""
     rows = []
     for station, g in df.groupby("station"):
         g = g.sort_values("datetime")
@@ -150,9 +131,7 @@ def coverage(df, pollutant="pm2_5"):
         })
     return pd.DataFrame(rows).sort_values("gap_fraction").reset_index(drop=True)
 
-
 def gap_lengths(df, pollutant="pm2_5"):
-    """Distribution of consecutive-missing-hour run lengths, per station."""
     runs = []
     for station, g in df.groupby("station"):
         g = g.sort_values("datetime").set_index("datetime")

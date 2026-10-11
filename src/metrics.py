@@ -1,5 +1,3 @@
-"""Metrics: outdoor activity safety scores and best-window finder."""
-
 import numpy as np
 import pandas as pd
 
@@ -22,9 +20,7 @@ ACTIVITY_ADVICE = [
     (0.0, "Stay in", "Keep windows shut and run a purifier if you have one."),
 ]
 
-
 def activity_safety_score(aqi, group="General adult"):
-    """1-10 safety rating for outdoor activity. 10 is safe, 1 is not."""
     if aqi is None or not np.isfinite(aqi):
         return None
     base = float(np.interp(
@@ -36,9 +32,7 @@ def activity_safety_score(aqi, group="General adult"):
     score = 1.0 + (base - 1.0) / factor
     return round(float(np.clip(score, 1.0, 10.0)), 1)
 
-
 def activity_verdict(score):
-    """Return headline and detailed advice for a given safety score."""
     if score is None:
         return "No data", "Not enough readings to judge."
     for threshold, headline, detail in ACTIVITY_ADVICE:
@@ -46,9 +40,7 @@ def activity_verdict(score):
             return headline, detail
     return "Stay in", ""
 
-
 def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime", earliest=None, latest=None):
-    """Find the cleanest contiguous `duration`-hour window in hourly data."""
     if hourly is None or len(hourly) == 0 or aqi_col not in hourly.columns:
         return None
 

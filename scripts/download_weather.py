@@ -1,5 +1,3 @@
-"""Fetch hourly weather history for every station in the store."""
-
 import argparse
 import os
 import sys
@@ -35,7 +33,6 @@ COLUMNS = {
     "precipitation": "precip_mm",
 }
 
-
 def fetch(lat, lon, start, end, retries=3):
     params = {
         "latitude": round(float(lat), 4), "longitude": round(float(lon), 4),
@@ -62,7 +59,6 @@ def fetch(lat, lon, start, end, retries=3):
                 raise
             time.sleep(5 * (attempt + 1))
     return None
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -124,7 +120,6 @@ def main():
         blh = out["blh_m"].notna().mean()
         print(f"boundary layer height available for {blh:.0%} of hours")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

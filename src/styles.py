@@ -1,5 +1,3 @@
-"""Glassmorphism dark theme: Streamlit CSS plus a shared Plotly template."""
-
 import plotly.graph_objects as go
 import plotly.io as pio
 
@@ -15,7 +13,6 @@ FONT = ("Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', "
         "Roboto, Helvetica, Arial, sans-serif")
 
 SERIES = ["#38BDF8", "#A78BFA", "#F472B6", "#FBBF24", "#34D399", "#FB923C"]
-
 
 def register_plotly_template():
     pio.templates["aqi_dark"] = go.layout.Template(
@@ -39,7 +36,6 @@ def register_plotly_template():
         )
     )
     pio.templates.default = "aqi_dark"
-
 
 CSS = f"""
 <style>
@@ -159,13 +155,10 @@ div[data-testid="stDataFrame"] {{ border:1px solid {BORDER}; border-radius:12px;
 </style>
 """
 
-
 def glow(hex_color, strength=0.4):
-    """Severity-tinted shadow, used to make AQI cards read at a glance."""
     h = hex_color.lstrip("#")
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     return f"0 0 26px rgba({r},{g},{b},{strength})"
-
 
 def inject(st):
     st.markdown(CSS, unsafe_allow_html=True)

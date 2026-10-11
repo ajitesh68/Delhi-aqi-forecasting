@@ -1,5 +1,3 @@
-"""Delhi AQI — live CPCB ground-station dashboard."""
-
 import pandas as pd
 import streamlit as st
 
@@ -16,26 +14,20 @@ styles.inject(st)
 
 user = auth.require_login()
 
-
 def card(body):
     st.markdown(f'<div class="glass">{body}</div>', unsafe_allow_html=True)
-
 
 def pill(text, kind="muted"):
     return f'<span class="pill pill-{kind}">{text}</span>'
 
-
 def short(name):
     return str(name).split(",")[0].strip()
-
-
 
 with st.spinner("Reading live CPCB stations..."):
     stations, meta = data_loader.live_stations()
 
 status = data_loader.store_status()
 summary = data_loader.city_summary(stations)
-
 
 with st.sidebar:
     st.markdown("### Delhi Air")
@@ -72,7 +64,6 @@ with st.sidebar:
            if status.get("collected_rows") else "none yet.")
     )
 
-
 left, right = st.columns([3, 2])
 with left:
     st.markdown("# Delhi is breathing")
@@ -100,7 +91,6 @@ if len(stations) == 0:
     st.error("No live station data available right now, and no cached sweep to "
              "fall back on. The CPCB feed may be rate-limited — try again shortly.")
     st.stop()
-
 
 row = stations[stations["station"] == selected].iloc[0] if selected else None
 
@@ -150,10 +140,8 @@ with c3:
 
 st.markdown("")
 
-
 (tab_live, tab_when, tab_forecast, tab_history) = st.tabs(
     ["Live map", "When to go out", "Tomorrow", "History"])
-
 
 with tab_live:
     view = st.radio("View", ["Stations", "Heatmap", "3D columns"],
@@ -199,7 +187,6 @@ with tab_live:
             highlight=selected,
             title="Every reporting station, ranked"),
         use_container_width=True)
-
 
 with tab_when:
     st.markdown("### When should I go outside?")
@@ -263,7 +250,6 @@ with tab_when:
                         f'{int(p["hour"]):02d}h</div>'
                         f'<div style="font-size:1.05rem;font-weight:800;color:{tone}">'
                         f'{s:g}</div></div>', unsafe_allow_html=True)
-
 
 with tab_history:
     st.markdown("### What the record shows")
@@ -331,8 +317,6 @@ with tab_history:
                          "no reading for them and the live feed serves only the "
                          "current hour, so they are interpolated, not measured.")
             st.caption(note)
-
-
 
 with tab_forecast:
     st.markdown("## The next 24 hours")

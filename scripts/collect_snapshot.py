@@ -1,5 +1,3 @@
-"""Append one live CPCB sweep to the parquet store."""
-
 import argparse
 import os
 import sys
@@ -16,7 +14,6 @@ from src.sources.cpcb_live import RateLimited, fetch_live, page_size
 TRANSIENT = (RateLimited, urllib.error.URLError, TimeoutError, OSError)
 
 PERMANENT_STATUS = {401, 403, 404}
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -60,7 +57,6 @@ def main():
         f"{meta['last_update']} -- rolling file {len(before):,} -> "
         f"{len(after):,} rows ({span})")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

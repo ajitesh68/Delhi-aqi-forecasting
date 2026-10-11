@@ -1,5 +1,3 @@
-"""Train the 24-hour PM2.5 forecaster on CPCB ground data."""
-
 import argparse
 import json
 import os
@@ -16,9 +14,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-
 def build_model(window, n_features, n_future, n_stations, embed_dim=6, horizon=24):
-    """Deliberately small: a few thousand training windows will not support"""
     sequence = keras.Input(shape=(window, n_features), name="sequence")
     future = keras.Input(shape=(horizon, n_future), name="future")
     station = keras.Input(shape=(1,), dtype="int32", name="station")
@@ -52,14 +48,10 @@ def build_model(window, n_features, n_future, n_stations, embed_dim=6, horizon=2
                   metrics=["mae"])
     return model
 
-
 def inverse(scaled, stats):
-    """Scaled log space back to ug/m3."""
     return np.expm1(scaled * stats["scale"] + stats["mean"]).clip(0)
 
-
 def to_concentration(scaled, station_ids, meta):
-    """Per-station inverse transform, since each has its own scaler."""
     index_to_name = {v: k for k, v in meta["stations"].items()}
     target = meta["target"]
     out = np.empty_like(scaled, dtype=float)
@@ -69,13 +61,10 @@ def to_concentration(scaled, station_ids, meta):
             out[rows] = inverse(scaled[rows], meta["scalers"][name][target])
     return out
 
-
 def persistence(X, meta):
-    """Baseline: tomorrow looks like the last 24 observed hours."""
     target_idx = meta["target_index"]
     last_day = X[:, -24:, target_idx]
     return np.repeat(last_day.mean(axis=1, keepdims=True), 24, axis=1)
-
 
 def report(name, pred, truth):
     mae = np.abs(pred - truth).mean()
@@ -86,7 +75,6 @@ def report(name, pred, truth):
     print(f"  {name:<14} MAE {mae:6.1f}   RMSE {rmse:6.1f}   "
           f"top-decile MAE {top_mae:6.1f}")
     return {"mae": float(mae), "rmse": float(rmse), "top_decile_mae": float(top_mae)}
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -179,7 +167,6 @@ def main():
     if not beats:
         print("Not shippable: the plan's gate is beating persistence on winter.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

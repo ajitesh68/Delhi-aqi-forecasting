@@ -1,5 +1,3 @@
-"""Bulk-backfill CPCB hourly history from OpenAQ into the parquet store."""
-
 import argparse
 import os
 import re
@@ -13,22 +11,18 @@ from src.config import CPCB_STORE, FORECAST_STATIONS
 from src.sources import store
 from src.sources.cpcb_history import discover_stations, fetch_station_history
 
-
 def normalise(name):
-    """'Anand Vihar, New Delhi - DPCC' -> 'anand vihar'."""
     if not name:
         return ""
     head = name.split(",")[0]
     head = re.sub(r"[^a-z0-9 ]", " ", head.lower())
     return re.sub(r"\s+", " ", head).strip()
 
-
 def select(stations, wanted):
     if wanted is None:
         return stations
     keys = {normalise(w) for w in wanted}
     return [s for s in stations if normalise(s["name"]) in keys]
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -85,7 +79,6 @@ def main():
 
     report()
 
-
 def report():
     df = store.load()
     if len(df) == 0:
@@ -112,7 +105,6 @@ def report():
         total = gaps["gap_hours"].sum()
         print(f"\n  interpolatable (<=3h): {short:,} of {total:,} missing hours "
               f"({100*short/total:.1f}%)")
-
 
 if __name__ == "__main__":
     main()

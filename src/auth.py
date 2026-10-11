@@ -1,5 +1,3 @@
-"""Email capture and the record of who has used this."""
-
 import datetime as dt
 import re
 
@@ -10,7 +8,6 @@ WORKSHEET = "users"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-
 def sheet_configured():
     try:
         return bool(st.secrets.get("gcp_service_account")) and bool(
@@ -18,14 +15,11 @@ def sheet_configured():
     except Exception:
         return False
 
-
 def current_user():
     email = st.session_state.get("user_email")
     return {"email": email} if email else None
 
-
 def require_login():
-    """Gate the page. Returns the signed-in user or stops the script."""
     user = current_user()
     if user is None:
         _login_screen()
@@ -33,7 +27,6 @@ def require_login():
 
     _record_once(user)
     return user
-
 
 def _login_screen():
     st.markdown("# Delhi Air")
@@ -55,7 +48,6 @@ def _login_screen():
                "it is never shared or sold. This is not verified against "
                "anything -- it is a count, not an account.")
 
-
 def _record_once(user):
     key = f"recorded:{user['email']}"
     if st.session_state.get(key) or not sheet_configured():
@@ -65,7 +57,6 @@ def _record_once(user):
         _upsert(user)
     except Exception as exc:
         st.session_state[f"record_error:{user['email']}"] = str(exc)
-
 
 @st.cache_resource(show_spinner=False)
 def _worksheet():
@@ -84,7 +75,6 @@ def _worksheet():
         sheet.update("A1", [SHEET_HEADERS])
     return sheet
 
-
 def _upsert(user):
     sheet = _worksheet()
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -95,7 +85,6 @@ def _upsert(user):
     row = sheet.row_values(cell.row)
     visits = int(row[3]) + 1 if len(row) > 3 and str(row[3]).isdigit() else 1
     sheet.update(f"C{cell.row}:D{cell.row}", [[now, visits]])
-
 
 def sidebar_account(user):
     st.markdown("---")

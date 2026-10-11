@@ -1,5 +1,3 @@
-"""Data loader: live stations, history, weather, and forecast predictions."""
-
 import pandas as pd
 import requests
 import streamlit as st
@@ -19,15 +17,12 @@ from src.sources.cpcb_live import fetch_live
 LIVE_TTL = 60
 HISTORY_TTL = 300
 
-
 @st.cache_data(ttl=LIVE_TTL, show_spinner=False)
 def live_stations():
-    """Current AQI at every reporting station from the WAQI feed."""
     df, meta = fetch_live()
     if len(df) == 0:
         return df, meta
 
-    # Pick the latest reading for each station
     latest = (
         df.sort_values("datetime")
         .groupby("station", as_index=False)
@@ -57,9 +52,7 @@ def live_stations():
     meta["total_stations"] = len(latest)
     return latest.sort_values("station").reset_index(drop=True), meta
 
-
 def city_summary(stations):
-    """Headline statistics across the entire city."""
     if stations is None or len(stations) == 0:
         return None
     valid = stations.dropna(subset=["aqi"])
@@ -81,10 +74,8 @@ def city_summary(stations):
         "updated": stations["datetime"].max(),
     }
 
-
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def history(stations=None, days=None, with_aqi=True, collected_only=False):
-    """Hourly history from the parquet store."""
     start = None
     if days:
         start = pd.Timestamp.now().normalize() - pd.Timedelta(days=days)
@@ -101,10 +92,8 @@ def history(stations=None, days=None, with_aqi=True, collected_only=False):
         return df
     return add_rolling_aqi(df)
 
-
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def store_status():
-    """Information on what the parquet store currently holds."""
     df = store.load()
     collected = len(store.load(RECENT_STORE, recent=None))
     if len(df) == 0:
@@ -124,10 +113,8 @@ def store_status():
         "station_list": sorted(df["station"].dropna().unique().tolist()),
     }
 
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def weather(lat, lon, days_back=14, forecast_hours=24):
-    """Observed and forecast weather from Open-Meteo API."""
     now = pd.Timestamp.now()
     fields = "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m"
     frames = []
@@ -172,7 +159,6 @@ def weather(lat, lon, days_back=14, forecast_hours=24):
         .reset_index(drop=True)
     )
 
-
 def _weather_frame(payload):
     hourly = (payload or {}).get("hourly")
     if not hourly:
@@ -186,13 +172,10 @@ def _weather_frame(payload):
         "wind_dir": hourly.get("wind_direction_10m"),
     })
 
-
 def _same(a, b):
     return str(a).split(",")[0].strip().lower() == str(b).split(",")[0].strip().lower()
 
-
 def forecast_station_options(status=None):
-    """Stations that have enough stored history to forecast from."""
     status = status or store_status()
     available = set(status.get("station_list") or [])
     if not available:
@@ -206,10 +189,8 @@ def forecast_station_options(status=None):
                 break
     return resolved or sorted(available)
 
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def station_weather(station):
-    """Observed and forecast weather for one station."""
     import os
     from src.config import STORE_DIR
 
@@ -230,10 +211,8 @@ def station_weather(station):
         ahead = ahead.rename(columns={"windspeed_kph": "wind_kph"})
     return observed, ahead
 
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def forecast_24h(station):
-    """24-hour neural forecast for the chosen station."""
     from src import forecast as fc
 
     if not fc.available():
@@ -265,8 +244,6 @@ def forecast_24h(station):
     result["last_observed"] = history["datetime"].max()
     return result
 
-
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def history_raw(station):
-    """Raw hourly readings for one station."""
     return store.load(stations=[station]).sort_values("datetime")

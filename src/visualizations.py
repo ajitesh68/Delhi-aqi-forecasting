@@ -1,5 +1,3 @@
-"""Plotly figures."""
-
 import numpy as np
 import plotly.graph_objects as go
 
@@ -12,7 +10,6 @@ CATEGORY_BANDS = [
     (200, 300, "Poor"), (300, 400, "Very Poor"), (400, 500, "Severe"),
 ]
 
-
 def _band_shapes(ymax, opacity=0.09):
     shapes = []
     for lo, hi, label in CATEGORY_BANDS:
@@ -24,7 +21,6 @@ def _band_shapes(ymax, opacity=0.09):
             fillcolor=AQI_COLORS[label], opacity=opacity, layer="below"))
     return shapes
 
-
 def _empty(message="Not enough data yet"):
     fig = go.Figure()
     fig.add_annotation(text=message, showarrow=False,
@@ -33,9 +29,7 @@ def _empty(message="Not enough data yet"):
     fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), height=260)
     return fig
 
-
 def diurnal_chart(profile, best_window=None, title="Average AQI by hour of day"):
-    """Hour-of-day profile with an inter-quartile ribbon."""
     if profile is None or len(profile) == 0:
         return _empty()
     d = profile.sort_values("hour")
@@ -67,7 +61,6 @@ def diurnal_chart(profile, best_window=None, title="Average AQI by hour of day")
         yaxis=dict(title="AQI", range=[0, ymax]), showlegend=False)
     return fig
 
-
 def station_ranking_chart(ranking, highlight=None, title="Stations right now"):
     if ranking is None or len(ranking) == 0:
         return _empty()
@@ -87,15 +80,12 @@ def station_ranking_chart(ranking, highlight=None, title="Stations right now"):
                       margin=dict(l=4, r=42))
     return fig
 
-
 def _estimated_split(g, value):
-    """Split a series into its observed part and its interpolated part."""
     est = g["estimated"].fillna(False).to_numpy(dtype=bool)
     bridge = est | np.r_[est[1:], False] | np.r_[False, est[:-1]]
     solid = g[value].where(~est)
     dashed = g[value].where(bridge)
     return solid, dashed
-
 
 def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340):
     if df is None or len(df) == 0 or value not in df.columns:
@@ -124,7 +114,7 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
                     hovertemplate="%{y:.0f} estimated<extra>" + short + "</extra>"))
             fig.add_trace(go.Scatter(
                 x=g[xcol], y=y, mode="lines+markers", name=short,
-                line=dict(width=1.7, color=colour), 
+                line=dict(width=1.7, color=colour),
                 marker=dict(size=4), connectgaps=False,
                 hovertemplate="%{y:.0f}<extra>" + short + "</extra>"))
     else:
@@ -141,7 +131,7 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
                               "<br><i>estimated, no station data</i><extra></extra>"))
         fig.add_trace(go.Scatter(
             x=d[xcol], y=y, mode="lines+markers", name="AQI",
-            line=dict(width=1.9, color=SERIES[0]), 
+            line=dict(width=1.9, color=SERIES[0]),
             marker=dict(size=4), connectgaps=False,
             hovertemplate="%{x|%d %b %H:%M}<br>AQI %{y:.0f}<extra></extra>"))
         fig.update_layout(showlegend=marked, legend=dict(
@@ -152,9 +142,7 @@ def timeseries_chart(df, value="aqi", by=None, title="AQI over time", height=340
                       hovermode="x unified")
     return fig
 
-
 def forecast_chart(hours, values, observed=None, title="Next 24 hours"):
-    """Forecast line, optionally with the observed run-up before it."""
     if hours is None or len(hours) == 0:
         return _empty()
     fig = go.Figure()
@@ -176,4 +164,3 @@ def forecast_chart(hours, values, observed=None, title="Next 24 hours"):
                       yaxis=dict(title="AQI", range=[0, ymax]), xaxis=dict(title=""),
                       hovermode="x unified")
     return fig
-

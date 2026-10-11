@@ -1,5 +1,3 @@
-"""Fetch live air quality observations from the WAQI API."""
-
 import json
 import os
 import urllib.error
@@ -14,14 +12,12 @@ CACHE_PATH = os.path.join(CACHE_DIR, "waqi_last_sweep.json")
 HEADERS = {"User-Agent": "delhi-aqi-dashboard/1.0", "Accept": "application/json"}
 CACHE_MAX_AGE_MIN = 15
 
-
 def _to_float(value):
     try:
         v = float(value)
         return None if v < 0 else v
     except (TypeError, ValueError):
         return None
-
 
 def _get_waqi(url):
     req = urllib.request.Request(url, headers=HEADERS)
@@ -31,9 +27,7 @@ def _get_waqi(url):
     except Exception:
         return {}
 
-
 def fetch_records():
-    """Fetch station observations within Delhi bounds from WAQI API."""
     key = waqi_key()
     if not key:
         return []
@@ -63,9 +57,7 @@ def fetch_records():
 
     return records
 
-
 def records_to_frame(records):
-    """Convert raw WAQI records into a standard DataFrame."""
     rows = []
     pollutant_map = {
         "pm25": "pm2_5", "pm10": "pm10", "no2": "no2",
@@ -119,7 +111,6 @@ def records_to_frame(records):
 
     return df.sort_values(["station", "datetime"]).reset_index(drop=True)
 
-
 def _read_cache():
     if not os.path.exists(CACHE_PATH):
         return [], None
@@ -135,15 +126,12 @@ def _read_cache():
     except Exception:
         return [], None
 
-
 def _write_cache(records):
     os.makedirs(CACHE_DIR, exist_ok=True)
     with open(CACHE_PATH, "w", encoding="utf-8") as fh:
         json.dump({"records": records, "cached_at": pd.Timestamp.now().isoformat()}, fh)
 
-
 def fetch_live(use_cache_on_error=True, max_age_min=CACHE_MAX_AGE_MIN):
-    """Fetch live stations data with disk cache fallback."""
     meta = {
         "stale": False, "error": None, "fetched_at": pd.Timestamp.now(),
         "from_cache": False, "cache_age_min": 0,

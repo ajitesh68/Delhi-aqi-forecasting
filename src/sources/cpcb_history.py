@@ -1,5 +1,3 @@
-"""Historical hourly CPCB observations from OpenAQ v3."""
-
 import json
 import time
 import urllib.error
@@ -14,11 +12,9 @@ from src.config import (CO_MGM3_RANGE, CO_UGM3_RANGE, DELHI_BOUNDS, OPENAQ_BASE,
 PAGE_SIZE = 1000
 SENTINELS = (-999.0, -9999.0, -99.0)
 
-
 def _headers():
     return {"X-API-Key": openaq_key(), "Accept": "application/json",
             "User-Agent": "delhi-aqi-dashboard/1.0"}
-
 
 def _get(path, params=None, retries=4):
     url = f"{OPENAQ_BASE}{path}"
@@ -41,9 +37,7 @@ def _get(path, params=None, retries=4):
             raise
     return {}
 
-
 def discover_stations(bounds=None, min_last="2026-01-01", providers=("CPCB",)):
-    """CPCB stations inside the Delhi-NCR box that still report."""
     b = bounds or DELHI_BOUNDS
     lat = (b["lat_min"] + b["lat_max"]) / 2
     lon = (b["lon_min"] + b["lon_max"]) / 2
@@ -78,9 +72,7 @@ def discover_stations(bounds=None, min_last="2026-01-01", providers=("CPCB",)):
         })
     return sorted(stations, key=lambda s: s["name"] or "")
 
-
 def fetch_sensor_hours(sensor_id, date_from, date_to=None, max_pages=40):
-    """All hourly readings for one sensor. Returns [(timestamp, value)]."""
     out, page = [], 1
     while page <= max_pages:
         params = {"datetime_from": date_from, "limit": PAGE_SIZE, "page": page}
@@ -101,7 +93,6 @@ def fetch_sensor_hours(sensor_id, date_from, date_to=None, max_pages=40):
         time.sleep(OPENAQ_THROTTLE)
     return out
 
-
 def _clean(values, pollutant):
     s = pd.to_numeric(pd.Series(values), errors="coerce")
     s = s.mask(s.isin(SENTINELS))
@@ -117,7 +108,6 @@ def _clean(values, pollutant):
         s = s.mask(s > ceiling)
     return s
 
-
 def resolve_co_unit(series):
     vals = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
     if len(vals) == 0:
@@ -129,9 +119,7 @@ def resolve_co_unit(series):
         return "ug/m3"
     return "unknown"
 
-
 def fetch_station_history(station, date_from, date_to=None, pollutants=None, log=print):
-    """Wide hourly frame for one station across all its pollutants."""
     wanted = pollutants or list(station["sensors"].keys())
     frames = []
     for pollutant in wanted:

@@ -1,5 +1,3 @@
-"""Turn the CPCB store into training sequences."""
-
 import argparse
 import json
 import os
@@ -30,9 +28,7 @@ PHYSICAL_MAX = {"pm2_5": 1200.0, "pm10": 2500.0, "no2": 800.0,
 HOLDOUT_START = pd.Timestamp("2026-01-01")
 HOLDOUT_END = pd.Timestamp("2026-02-01")
 
-
 def _time_features(index):
-    """Cyclical encodings so 23:00 and 00:00 are adjacent, not 23 apart."""
     hour = index.hour.to_numpy()
     dow = index.dayofweek.to_numpy()
     doy = index.dayofyear.to_numpy()
@@ -42,14 +38,12 @@ def _time_features(index):
         np.sin(2 * np.pi * doy / 365.25), np.cos(2 * np.pi * doy / 365.25),
     ]).astype(np.float32)
 
-
 FEATURE_NAMES = ([f"{p}_scaled" for p in POLLUTANTS]
                  + WEATHER_FEATURES
                  + ["hour_sin", "hour_cos", "dow_sin", "dow_cos",
                     "doy_sin", "doy_cos", "is_observed"])
 
 FUTURE_FEATURE_NAMES = WEATHER_FEATURES + ["hour_sin", "hour_cos"]
-
 
 def load_weather():
     if not WEATHER_PATH.exists():
@@ -60,7 +54,6 @@ def load_weather():
     w["wind_u"] = speed * np.sin(radians)
     w["wind_v"] = speed * np.cos(radians)
     return w
-
 
 def fit_weather_scalers(frame, train_mask):
     stats = {}
@@ -75,7 +68,6 @@ def fit_weather_scalers(frame, train_mask):
                          "scale": std if std > 1e-6 else 1.0}
     return stats
 
-
 def weather_block(frame, stats):
     columns = []
     for column in WEATHER_FEATURES:
@@ -88,9 +80,7 @@ def weather_block(frame, stats):
         columns.append(((raw - entry["mean"]) / entry["scale"]).astype(np.float32))
     return np.column_stack(columns)
 
-
 def build_station_frame(df, weather=None):
-    """Continuous hourly frame with an observation mask and short-gap fill."""
     df = df.sort_values("datetime").drop_duplicates("datetime")
     index = pd.date_range(df["datetime"].min(), df["datetime"].max(), freq="h")
     frame = df.set_index("datetime").reindex(index)
@@ -118,9 +108,7 @@ def build_station_frame(df, weather=None):
                 frame[column] = frame[column].interpolate(limit=6).ffill().bfill()
     return frame
 
-
 def fit_scalers(frame, train_mask):
-    """Per-pollutant log-space mean and scale, from training rows only."""
     scalers = {}
     for pollutant in POLLUTANTS:
         if pollutant not in frame.columns:
@@ -135,9 +123,7 @@ def fit_scalers(frame, train_mask):
                               "n_fit": int(len(values))}
     return scalers
 
-
 def apply_scalers(frame, scalers, weather_stats=None):
-    """Scaled matrix plus the per-hour feature block."""
     columns = []
     for pollutant in POLLUTANTS:
         stats = scalers.get(pollutant)
@@ -157,17 +143,13 @@ def apply_scalers(frame, scalers, weather_stats=None):
     blocks += [times, observed]
     return np.hstack(blocks).astype(np.float32)
 
-
 def future_block(frame, weather_stats):
-    """Weather over the target hours, plus hour-of-day so the model can"""
     times = _time_features(pd.DatetimeIndex(frame["datetime"]))[:, :2]
     if not weather_stats:
         return times.astype(np.float32)
     return np.hstack([weather_block(frame, weather_stats), times]).astype(np.float32)
 
-
 def cut_windows(features, future, frame, target_col_idx):
-    """Yield (input window, 24h target, target start) for usable windows."""
     observed = frame["is_observed"].to_numpy()
     filled = frame["is_filled"].to_numpy()
     times = pd.DatetimeIndex(frame["datetime"])
@@ -193,14 +175,12 @@ def cut_windows(features, future, frame, target_col_idx):
                times[w0], times[t0], times[t1 - 1],
                float(observed[w0:w1].mean()))
 
-
 def _longest_run(mask):
     longest = current = 0
     for flag in mask:
         current = current + 1 if flag else 0
         longest = max(longest, current)
     return longest
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -343,7 +323,6 @@ def main():
           f"stations: {len(station_index)}")
     print(f"wrote {out / 'sequences.npz'} and {out / 'meta.json'}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
