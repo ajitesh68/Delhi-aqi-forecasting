@@ -1,3 +1,4 @@
+import importlib
 import pandas as pd
 import streamlit as st
 
@@ -6,9 +7,23 @@ st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
 
 from src import (analysis, auth, data_loader, maps, metrics, styles,
                  visualizations as viz)
+
+try:
+    importlib.reload(metrics)
+except Exception:
+    pass
+
 from src.aqi import health_advisory
 from src.config import AQI_COLORS, RECENT_WINDOW_DAYS
 from src.metrics import SENSITIVITY
+
+def get_cigs(value):
+    fn = getattr(metrics, "cigarette_equivalent", None)
+    if fn is not None:
+        return fn(value)
+    if value is None or not (isinstance(value, (int, float)) and value > 0):
+        return 0.0
+    return round(float(value) / 22.0, 1)
 
 styles.inject(st)
 
@@ -112,7 +127,7 @@ with c1:
 
 with c2:
     pm25_val = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else (row["aqi"] if row is not None and pd.notna(row.get("aqi")) else None)
-    cigs = metrics.cigarette_equivalent(pm25_val) if pm25_val is not None else None
+    cigs = get_cigs(pm25_val) if pm25_val is not None else None
     if cigs is not None:
         c_tone = "#22C55E" if cigs < 2.0 else "#FBBF24" if cigs < 5.0 else "#F97316" if cigs < 10.0 else "#EF4444"
         card(f'<div class="eyebrow">Cigarettes Consumed</div>'
