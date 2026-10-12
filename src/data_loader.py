@@ -173,7 +173,10 @@ def _weather_frame(payload):
     })
 
 def _same(a, b):
-    return str(a).split(",")[0].strip().lower() == str(b).split(",")[0].strip().lower()
+    import re
+    na = " ".join(re.findall(r"\w+", str(a).split(",")[0].lower()))
+    nb = " ".join(re.findall(r"\w+", str(b).split(",")[0].lower()))
+    return na == nb or na in nb or nb in na
 
 def forecast_station_options(status=None):
     status = status or store_status()

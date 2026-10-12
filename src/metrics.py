@@ -81,3 +81,9 @@ def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime", 
     best["saving_vs_worst"] = worst["mean_aqi"] - best["mean_aqi"]
     best["all_windows"] = candidates
     return best
+
+def cigarette_equivalent(value):
+    if value is None or not np.isfinite(value) or value <= 0:
+        return 0.0
+    return round(float(value) / 22.0, 1)
+

@@ -7,7 +7,7 @@ st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
 from src import (analysis, auth, data_loader, maps, metrics, styles,
                  visualizations as viz)
 from src.aqi import health_advisory
-from src.config import AQI_COLORS
+from src.config import AQI_COLORS, RECENT_WINDOW_DAYS
 from src.metrics import SENSITIVITY
 
 styles.inject(st)
@@ -111,18 +111,19 @@ with c1:
              f'CPCB needs three pollutants including a PM measurement.</div>')
 
 with c2:
-    pm25_aqi = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else None
-    pm10_aqi = row["pm10"] if row is not None and pd.notna(row.get("pm10")) else None
-    if pm25_aqi is not None:
-        pm10_sub = f" &bull; PM10 AQI: <b>{pm10_aqi:.0f}</b>" if pm10_aqi else ""
-        card(f'<div class="eyebrow">Key Pollutants</div>'
-             f'<div class="metric-value">{pm25_aqi:.0f} <span style="font-size:1.1rem;'
-             f'font-weight:600;opacity:.6">PM2.5 AQI</span></div>'
-             f'<div class="metric-sub">Individual sub-index reported by station{pm10_sub}.</div>')
+    pm25_val = row["pm2_5"] if row is not None and pd.notna(row.get("pm2_5")) else (row["aqi"] if row is not None and pd.notna(row.get("aqi")) else None)
+    cigs = metrics.cigarette_equivalent(pm25_val) if pm25_val is not None else None
+    if cigs is not None:
+        c_tone = "#22C55E" if cigs < 2.0 else "#FBBF24" if cigs < 5.0 else "#F97316" if cigs < 10.0 else "#EF4444"
+        card(f'<div class="eyebrow">Cigarettes Consumed</div>'
+             f'<div class="metric-value" style="color:{c_tone}">🚬 {cigs}'
+             f'<span style="font-size:1.1rem;font-weight:600;opacity:.6"> cig / day</span></div>'
+             f'<div class="metric-sub">Breathing this air for 24 hours is equivalent to smoking '
+             f'<b>~{cigs:g} cigarettes</b> today.</div>')
     else:
-        card('<div class="eyebrow">Key Pollutants</div>'
+        card('<div class="eyebrow">Cigarettes Consumed</div>'
              '<div class="metric-value" style="opacity:.4">--</div>'
-             '<div class="metric-sub">This station is not reporting PM2.5 right now.</div>')
+             '<div class="metric-sub">Not enough data to calculate cigarette equivalence.</div>')
 
 with c3:
     score = metrics.activity_safety_score(row["aqi"], group) if row is not None and pd.notna(row["aqi"]) else None
@@ -194,11 +195,12 @@ with tab_when:
         st.info("Building the answer from real CPCB history — the archive "
                 "download is still running. This will fill in automatically.")
     else:
-        hist = data_loader.history(stations=[selected] if selected else None, days=120)
+        hist = data_loader.history(stations=[selected] if selected else None,
+                                   days=RECENT_WINDOW_DAYS, collected_only=True)
         if len(hist) == 0 and selected:
-            st.info(f"No stored history for {short(selected)} yet. The archive "
-                    "download covers a subset of stations first.")
-            hist = data_loader.history(days=120)
+            st.info(f"No stored history for {short(selected)} yet in recent window. "
+                    "Showing citywide recent profile.")
+            hist = data_loader.history(days=RECENT_WINDOW_DAYS, collected_only=True)
 
         profile = analysis.diurnal_profile(hist, by=None)
         if len(profile) == 0:
@@ -371,8 +373,8 @@ with tab_forecast:
                      f'{int(peak["aqi"])}</div>'
                      f'<div class="metric-sub"><b>{peak["category"]}</b> around '
                      f'{pd.Timestamp(peak["datetime"]):%H:%M}. '
-                     f'Forecast PM2.5 peaks near '
-                     f'{frame["pm2_5"].max():.0f} µg/m³.</div>')
+                     f'Forecast PM2.5 sub-index peaks near '
+                     f'{frame["pm2_5"].max():.0f} AQI.</div>')
 
             observed_pct = forecast["frac_observed"]
             beyond = forecast["frac_beyond_training"]
@@ -423,17 +425,4 @@ with tab_forecast:
                      f'baseline. Severe episodes are the hardest to call and '
                      f'the ones that matter.</div>')
 
-            st.caption(
-                f"Trained on {scorecard['train_windows']:,} windows from "
-                f"{len(scorecard['stations'])} stations and scored on "
-                f"{scorecard['holdout_windows']:,} windows in January 2026. "
-                "The model predicts a departure from persistence rather than a "
-                "level, and reads the next 24 hours of forecast weather — wind, "
-                "temperature and boundary-layer height — which is the only "
-                "thing it knows that persistence does not.")
 
-        st.caption(
-            "One honest limitation: the model is trained on a single Delhi "
-            "winter, so it under-predicts the sharpest peaks. Compare the "
-            "forecast range against the observed line before relying on it "
-            "during a severe episode.")

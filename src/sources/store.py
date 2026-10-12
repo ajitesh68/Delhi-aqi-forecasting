@@ -101,12 +101,12 @@ def append(incoming, path=CPCB_STORE):
     save(merged, path)
     return merged
 
-def append_recent(incoming, path=RECENT_STORE, archive=CPCB_STORE,
+def append_recent(incoming, path=RECENT_STORE, archive=None,
                   days=RECENT_WINDOW_DAYS):
     existing = load(path, recent=None)
-    reference = load(archive, recent=None)
+    reference = existing if (archive is None or len(existing) > 0) else load(archive, recent=None)
     if len(reference) == 0:
-        reference = existing
+        reference = incoming
 
     merged = merge(existing, canonical_names(incoming, reference))
     if len(merged) and days:
