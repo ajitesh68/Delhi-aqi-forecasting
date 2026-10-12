@@ -6,7 +6,7 @@ from src.config import (CPCB_STORE, POLLUTANTS, RECENT_STORE,
 
 SOURCE_PRIORITY = {"openaq": 3, "datagov": 2, "interpolated": 1}
 
-META_COLUMNS = ["datetime", "station", "city", "lat", "lon", "source", "is_observed"]
+META_COLUMNS = ["datetime", "station", "city", "lat", "lon", "source", "is_observed", "aqi"]
 COLUMNS = META_COLUMNS + POLLUTANTS
 
 def empty_frame():
@@ -22,7 +22,7 @@ def _coerce(df):
     if getattr(df["datetime"].dtype, "tz", None) is not None:
         df["datetime"] = df["datetime"].dt.tz_localize(None)
     df["datetime"] = df["datetime"].dt.floor("h")
-    for col in POLLUTANTS + ["lat", "lon"]:
+    for col in POLLUTANTS + ["lat", "lon", "aqi"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     for col in ("station", "city", "source"):
         df[col] = df[col].astype("string")

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.aqi import AVERAGING_HOURS, calculate_aqi
+from src.aqi import AVERAGING_HOURS, get_category
 from src.config import FORECAST_HOURS, MODELS_DIR, POLLUTANTS, WINDOW_SIZE
 
 WEATHER_FEATURES = ["temp_c", "humidity", "pressure_mb", "wind_kph",
@@ -218,11 +218,12 @@ def forecast_aqi(history, forecast_pm25, forecast_hours):
     rows = []
     for i, (hour, value) in enumerate(zip(forecast_hours, forecast_pm25)):
         mixed = np.concatenate([recent, forecast_pm25[:i + 1]])[-window:]
-        result = calculate_aqi({"pm2_5": (float(mixed.mean()), len(mixed))},
-                               require_three=False)
-        rows.append({"datetime": hour, "pm2_5": float(value),
-                     "pm2_5_24h": float(mixed.mean()),
-                     "aqi": result["aqi"], "category": result["category"]})
+        val = float(value)
+        aqi_val = round(val)
+        cat = get_category(aqi_val)
+        rows.append({"datetime": hour, "pm2_5": val,
+                     "pm2_5_24h": float(mixed.mean()) if len(mixed) else val,
+                     "aqi": aqi_val, "category": cat})
     return pd.DataFrame(rows)
 
 def persistence_baseline(history, hours=FORECAST_HOURS):

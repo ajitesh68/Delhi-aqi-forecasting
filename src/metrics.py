@@ -82,8 +82,32 @@ def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime", 
     best["all_windows"] = candidates
     return best
 
-def cigarette_equivalent(value):
-    if value is None or not np.isfinite(value) or value <= 0:
+def aqi_to_pm25_concentration(aqi_val):
+    if aqi_val is None or not np.isfinite(aqi_val) or aqi_val <= 0:
         return 0.0
-    return round(float(value) / 22.0, 1)
+    breakpoints = [
+        (0.0, 12.0, 0, 50),
+        (12.1, 35.4, 51, 100),
+        (35.5, 55.4, 101, 150),
+        (55.5, 150.4, 151, 200),
+        (150.5, 250.4, 201, 300),
+        (250.5, 350.4, 301, 400),
+        (350.5, 500.4, 401, 500),
+    ]
+    for c_lo, c_hi, i_lo, i_hi in breakpoints:
+        if aqi_val <= i_hi:
+            if i_hi == i_lo:
+                return float(c_hi)
+            return float(c_lo + (aqi_val - i_lo) / (i_hi - i_lo) * (c_hi - c_lo))
+    return float(500.4 + (aqi_val - 500) * 0.5)
+
+def cigarette_equivalent(aqi_val):
+    """
+    Berkeley Earth Rule: 22 ug/m3 of PM2.5 per 24 hours equals 1 cigarette.
+    Converts reported AQI to PM2.5 concentration (ug/m3) first, then divides by 22.
+    """
+    if aqi_val is None or not np.isfinite(aqi_val) or aqi_val <= 0:
+        return 0.0
+    conc = aqi_to_pm25_concentration(aqi_val)
+    return round(float(conc / 22.0), 1)
 

@@ -88,9 +88,16 @@ def history(stations=None, days=None, with_aqi=True, collected_only=False):
         stations = [have for have in available if any(_same(want, have) for want in stations)] or None
 
     df = store.load(path, stations=stations, start=start, recent=recent)
-    if len(df) == 0 or not with_aqi:
+    if len(df) == 0:
         return df
-    return add_rolling_aqi(df)
+
+    if "aqi" not in df.columns:
+        df["aqi"] = df["pm2_5"] if "pm2_5" in df.columns else None
+    else:
+        df["aqi"] = df["aqi"].fillna(df["pm2_5"] if "pm2_5" in df.columns else None)
+
+    df["aqi_instant"] = df["aqi"]
+    return df
 
 @st.cache_data(ttl=HISTORY_TTL, show_spinner=False)
 def store_status():
