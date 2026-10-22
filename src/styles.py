@@ -155,11 +155,7 @@ div[data-testid="stDataFrame"] {{ border:1px solid {BORDER}; border-radius:12px;
 </style>
 """
 
-def glow(hex_color, strength=0.4):
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-    return f"0 0 26px rgba({r},{g},{b},{strength})"
-
 def inject(st):
     st.markdown(CSS, unsafe_allow_html=True)
     register_plotly_template()
+

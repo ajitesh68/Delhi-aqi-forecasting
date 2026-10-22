@@ -42,7 +42,7 @@ jobs:
       - name: Append the current hour
         env:
           WAQI_API_KEY: ${{ secrets.WAQI_API_KEY }}
-        run: python scripts/collect_snapshot.py --cities Delhi
+        run: python scripts/collect_snapshot.py
 
       - name: Commit the rolling window if it changed
         run: |

@@ -1,8 +1,8 @@
 import numpy as np
-import pandas as pd
 
 from src.aqi import get_category
 
+# Activity sensitivity factors based on inhalation rate and vulnerability
 SENSITIVITY = {
     "General adult": 1.00,
     "Runner / cyclist": 1.85,
@@ -12,6 +12,7 @@ SENSITIVITY = {
     "Pregnant": 1.35,
 }
 
+# Thresholds for activity recommendations (Score out of 10)
 ACTIVITY_ADVICE = [
     (8.5, "Go ahead", "Air is fine for this. No precautions needed."),
     (6.5, "Mostly fine", "Reasonable. Keep intense effort under an hour."),
@@ -20,19 +21,37 @@ ACTIVITY_ADVICE = [
     (0.0, "Stay in", "Keep windows shut and run a purifier if you have one."),
 ]
 
-def activity_safety_score(aqi, group="General adult"):
+# Official EPA/CPCB AQI Breakpoints: (Concentration Low, Concentration High, AQI Low, AQI High)
+PM25_BREAKPOINTS = [
+    (0.0, 12.0, 0, 50),
+    (12.1, 35.4, 51, 100),
+    (35.5, 55.4, 101, 150),
+    (55.5, 150.4, 151, 200),
+    (150.5, 250.4, 201, 300),
+    (250.5, 350.4, 301, 400),
+    (350.5, 500.4, 401, 500),
+]
+
+
+def activity_safety_score(aqi: float, group: str = "General adult") -> float | None:
+    """Calculates a personalized 1.0 to 10.0 safety score for outdoor activity."""
     if aqi is None or not np.isfinite(aqi):
         return None
-    base = float(np.interp(
+
+    # Map AQI to a 10 (clean) down to 1 (severe) baseline score
+    base_score = float(np.interp(
         aqi,
         [0, 50, 100, 200, 300, 400, 500],
-        [10, 9.2, 7.8, 5.0, 2.8, 1.4, 1.0],
+        [10.0, 9.2, 7.8, 5.0, 2.8, 1.4, 1.0],
     ))
-    factor = SENSITIVITY.get(group, 1.0)
-    score = 1.0 + (base - 1.0) / factor
-    return round(float(np.clip(score, 1.0, 10.0)), 1)
 
-def activity_verdict(score):
+    sensitivity_factor = SENSITIVITY.get(group, 1.0)
+    adjusted_score = 1.0 + (base_score - 1.0) / sensitivity_factor
+    return round(float(np.clip(adjusted_score, 1.0, 10.0)), 1)
+
+
+def activity_verdict(score: float | None) -> tuple[str, str]:
+    """Returns a headline and actionable advice based on the activity safety score."""
     if score is None:
         return "No data", "Not enough readings to judge."
     for threshold, headline, detail in ACTIVITY_ADVICE:
@@ -40,74 +59,32 @@ def activity_verdict(score):
             return headline, detail
     return "Stay in", ""
 
-def best_outdoor_window(hourly, duration=2, aqi_col="aqi", time_col="datetime", earliest=None, latest=None):
-    if hourly is None or len(hourly) == 0 or aqi_col not in hourly.columns:
-        return None
 
-    df = hourly[[time_col, aqi_col]].dropna().copy()
-    df[time_col] = pd.to_datetime(df[time_col])
-    df = df.sort_values(time_col).reset_index(drop=True)
-    if len(df) < duration:
-        return None
-
-    hours = df[time_col].dt.hour
-    mask = pd.Series(True, index=df.index)
-    if earliest is not None:
-        mask &= hours >= earliest
-    if latest is not None:
-        mask &= hours <= latest
-
-    candidates = []
-    for i in range(len(df) - duration + 1):
-        block = df.iloc[i : i + duration]
-        spans = (block[time_col].diff().dropna() == pd.Timedelta(hours=1)).all()
-        if not spans or not mask.iloc[i : i + duration].all():
-            continue
-        candidates.append({
-            "start": block[time_col].iloc[0],
-            "end": block[time_col].iloc[-1],
-            "mean_aqi": round(float(block[aqi_col].mean())),
-            "max_aqi": round(float(block[aqi_col].max())),
-        })
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda c: c["mean_aqi"])
-    best = dict(candidates[0])
-    best["category"] = get_category(best["mean_aqi"])
-    best["safety"] = activity_safety_score(best["mean_aqi"])
-    worst = max(candidates, key=lambda c: c["mean_aqi"])
-    best["saving_vs_worst"] = worst["mean_aqi"] - best["mean_aqi"]
-    best["all_windows"] = candidates
-    return best
-
-def aqi_to_pm25_concentration(aqi_val):
+def aqi_to_pm25_concentration(aqi_val: float) -> float:
+    """
+    Inverts the piecewise AQI formula back to PM2.5 mass concentration (ug/m3).
+    AQI is a non-linear index, so we interpolate backwards through the breakpoint table.
+    """
     if aqi_val is None or not np.isfinite(aqi_val) or aqi_val <= 0:
         return 0.0
-    breakpoints = [
-        (0.0, 12.0, 0, 50),
-        (12.1, 35.4, 51, 100),
-        (35.5, 55.4, 101, 150),
-        (55.5, 150.4, 151, 200),
-        (150.5, 250.4, 201, 300),
-        (250.5, 350.4, 301, 400),
-        (350.5, 500.4, 401, 500),
-    ]
-    for c_lo, c_hi, i_lo, i_hi in breakpoints:
-        if aqi_val <= i_hi:
-            if i_hi == i_lo:
-                return float(c_hi)
-            return float(c_lo + (aqi_val - i_lo) / (i_hi - i_lo) * (c_hi - c_lo))
+
+    for conc_low, conc_high, aqi_low, aqi_high in PM25_BREAKPOINTS:
+        if aqi_val <= aqi_high:
+            if aqi_high == aqi_low:
+                return float(conc_high)
+            fraction = (aqi_val - aqi_low) / (aqi_high - aqi_low)
+            return float(conc_low + fraction * (conc_high - conc_low))
+
+    # Extrapolate beyond AQI 500 linearly
     return float(500.4 + (aqi_val - 500) * 0.5)
 
-def cigarette_equivalent(aqi_val):
+
+def cigarette_equivalent(aqi_val: float) -> float:
     """
-    Berkeley Earth Rule: 22 ug/m3 of PM2.5 per 24 hours equals 1 cigarette.
-    Converts reported AQI to PM2.5 concentration (ug/m3) first, then divides by 22.
+    Berkeley Earth Rule: 22 ug/m3 of PM2.5 over 24 hours equals smoking 1 cigarette.
+    First inverts AQI to PM2.5 concentration (ug/m3), then divides by 22.
     """
     if aqi_val is None or not np.isfinite(aqi_val) or aqi_val <= 0:
         return 0.0
-    conc = aqi_to_pm25_concentration(aqi_val)
-    return round(float(conc / 22.0), 1)
-
+    concentration_ugm3 = aqi_to_pm25_concentration(aqi_val)
+    return round(float(concentration_ugm3 / 22.0), 1)

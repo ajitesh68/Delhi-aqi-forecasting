@@ -60,24 +60,17 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-No API key needed — the public data.gov.in demo key is the fallback. That
-key is shared by every anonymous caller and rate-limits often, so for
-anything beyond a quick look, register a free key at
-[data.gov.in](https://data.gov.in/user/register) and set it:
+Get a free API token from [WAQI (aqicn.org/api)](https://aqicn.org/data-platform/token/) and set it in your `.env` file or environment:
 
 ```bash
-export DATA_GOV_IN_API_KEY=your_key_here
+export WAQI_API_KEY=your_key_here
 ```
 
 ## How the data is kept
 
-The live feed serves only the current hour — there is no history endpoint.
-So `scripts/collect_snapshot.py` runs hourly in GitHub Actions, appending
-each hour to a rolling parquet file that keeps the last 40 days. That file
-is what every chart reads.
+The live feed serves the current hour. `scripts/collect_snapshot.py` runs hourly in GitHub Actions, appending each hour to a rolling parquet file (`data/store/cpcb_recent.parquet`) that keeps the last 40 days. That file is what the charts and history views read.
 
-A separate archive of older hours (`data/store/cpcb_hourly.parquet`) is
-kept for training the forecasting model and is not used by the charts.
+A separate archive of older hours (`data/store/cpcb_hourly.parquet`) is kept for training the forecasting model.
 
 ## The forecast
 
@@ -92,14 +85,11 @@ next 24 hours of forecast weather, and predicts PM2.5 for each of the next
 
 Persistence — "tomorrow looks like today" — is a strong baseline at this
 horizon, which is why it is the bar. The model clears it by 3.4% overall
-and 15.3% on the hours that matter. It is trained on a single Delhi
-winter, so it under-predicts the sharpest peaks.
+and 15.3% on the hours that matter.
 
-Rebuilding the model from scratch:
+Model retraining pipeline:
 
 ```bash
-python scripts/download_cpcb_history.py   # archive backfill
-python scripts/download_weather.py        # per-station weather
 python scripts/prepare_cpcb_data.py       # windows -> sequences
 python scripts/train_cpcb.py              # model + scorecard
 ```
@@ -109,14 +99,15 @@ python scripts/train_cpcb.py              # model + scorecard
 ```
 app.py                  Streamlit entry and tabs
 src/
-  aqi.py                CPCB AQI: breakpoints, rolling windows
-  data_loader.py        the app's only data entry point
+  aqi.py                CPCB AQI breakpoints and categories
+  data_loader.py        the app's single data entry point
   forecast.py           model loading and inference
   analysis.py           daily roll-ups from observed hours
-  metrics.py            activity safety, best window
+  metrics.py            activity safety and Berkeley Earth cigarette equivalence
   visualizations.py     Plotly charts
-  maps.py               Pydeck maps
-  sources/              data.gov.in, OpenAQ, parquet store
-scripts/                backfill, training, hourly collector
-tests/                  AQI correctness
+  maps.py               Pydeck maps (Scatterplot, Heatmap, 3D Columns)
+  sources/              WAQI live feed, parquet store
+scripts/                hourly collector, training pipeline
+tests/                  AQI correctness tests
 ```
+

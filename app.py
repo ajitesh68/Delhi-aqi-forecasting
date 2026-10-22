@@ -5,7 +5,7 @@ import streamlit as st
 st.set_page_config(page_title="Delhi Air | CPCB Live", page_icon="🌫️",
                    layout="wide", initial_sidebar_state="expanded")
 
-from src import (analysis, auth, data_loader, maps, metrics, styles,
+from src import (analysis, data_loader, maps, metrics, styles,
                  visualizations as viz)
 
 try:
@@ -18,29 +18,10 @@ from src.config import AQI_COLORS, RECENT_WINDOW_DAYS
 from src.metrics import SENSITIVITY
 
 def get_cigs(value):
-    fn = getattr(metrics, "cigarette_equivalent", None)
-    if fn is not None:
-        return fn(value)
-    if value is None or not (isinstance(value, (int, float)) and value > 0):
-        return 0.0
-    bp = [
-        (0.0, 12.0, 0, 50),
-        (12.1, 35.4, 51, 100),
-        (35.5, 55.4, 101, 150),
-        (55.5, 150.4, 151, 200),
-        (150.5, 250.4, 201, 300),
-        (250.5, 350.4, 301, 400),
-        (350.5, 500.4, 401, 500),
-    ]
-    for c_lo, c_hi, i_lo, i_hi in bp:
-        if value <= i_hi:
-            conc = c_lo + (value - i_lo) / (i_hi - i_lo) * (c_hi - c_lo) if i_hi > i_lo else c_hi
-            return round(conc / 22.0, 1)
-    return round((500.4 + (value - 500) * 0.5) / 22.0, 1)
+    return metrics.cigarette_equivalent(value)
+
 
 styles.inject(st)
-
-user = auth.require_login()
 
 def card(body):
     st.markdown(f'<div class="glass">{body}</div>', unsafe_allow_html=True)
@@ -72,8 +53,6 @@ with st.sidebar:
                             format_func=short) if station_names else None
 
     group = st.selectbox("Who is this for?", list(SENSITIVITY.keys()))
-
-    auth.sidebar_account(user)
 
     st.markdown("---")
     if st.button("🔄 Refresh Data", use_container_width=True):

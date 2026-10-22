@@ -11,8 +11,9 @@ from src.sources import store
 from src.sources.cpcb_live import fetch_live
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--quiet", action="store_true")
+    ap = argparse.ArgumentParser(description="Collect hourly CPCB snapshot")
+    ap.add_argument("--quiet", action="store_true", help="Suppress informational logging")
+    ap.add_argument("--cities", nargs="*", default=None, help="City names (kept for backwards compatibility)")
     args = ap.parse_args()
 
     def log(msg):
